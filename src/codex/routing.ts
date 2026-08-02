@@ -295,7 +295,7 @@ export function pickLowestUsageCodexAccount(config: OcxConfig, excludeId?: strin
   return best;
 }
 
-function setActiveCodexAccount(config: OcxConfig, accountId: string): void {
+export function setActiveCodexAccount(config: OcxConfig, accountId: string): void {
   if (config.activeCodexAccountId === accountId) return;
   config.activeCodexAccountId = accountId;
   saveConfig(config);

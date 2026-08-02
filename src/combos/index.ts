@@ -38,3 +38,8 @@ export {
   concreteComboRequestBody,
   resetComboEffortWarningStateForTests,
 } from "./request";
+export {
+  isAccountRetryableComboFailure,
+  rotateCodexComboAccount,
+  rotateOAuthComboAccount,
+} from "./account-failover";

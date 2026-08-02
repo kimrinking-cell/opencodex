@@ -36,6 +36,7 @@ import {
 import { CODEX_UNKNOWN_USAGE_SCORE } from "../src/codex/quota";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import { routeModel } from "../src/router";
+import { rotateCodexComboAccount } from "../src/combos/account-failover";
 import { consumeForInspection } from "../src/server/relay";
 import type { OcxConfig } from "../src/types";
 
@@ -128,6 +129,17 @@ describe("codex routing", () => {
     updateAccountQuota("a", 85);
     updateAccountQuota("b", 20);
     expect(resolveCodexAccountForThread("new-thread", config)).toBe("b");
+  });
+
+  test("combo account retry selects the lowest-usage untried Codex account", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 12);
+    const attempted = new Set<string>();
+
+    expect(rotateCodexComboAccount(config, "a", attempted)).toBe("b");
+    expect(config.activeCodexAccountId).toBe("b");
+    expect(attempted).toEqual(new Set(["a"]));
   });
 
   test("missing OpenAI mode defaults to pool and rotates from hot main to a cool added account", () => {

@@ -17,11 +17,14 @@ import {
   comboIdFromRawBody,
   concreteComboRequestBody,
   getCombo,
+  isAccountRetryableComboFailure,
   isComboTargetInCooldown,
   NoAvailableComboTargetsError,
   noteComboSuccess,
   parseRetryAfterMs,
   pickComboTarget,
+  rotateCodexComboAccount,
+  rotateOAuthComboAccount,
   targetKey,
 } from "../../combos";
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
@@ -36,6 +39,7 @@ import {
   type OAuthAccessSnapshot,
   UnsupportedOAuthProviderError,
 } from "../../oauth";
+import { getAccountSet } from "../../oauth/store";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { describeImagesInPlace, planVisionSidecar, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
@@ -378,6 +382,8 @@ export async function handleComboResponses(
   }
 
   let lastFailure: Response | null = null;
+  const attemptedCodexAccounts = new Map<string, Set<string>>();
+  const attemptedOAuthAccounts = new Map<string, Set<string>>();
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const childLog: RequestLogContext = {
@@ -385,6 +391,10 @@ export async function handleComboResponses(
       provider: pick.target.provider,
     };
     const targetRoute = routeModel(config, `${pick.target.provider}/${pick.target.model}`);
+    const targetId = targetKey(pick.target);
+    const oauthAccountId = targetRoute.provider.authMode === "oauth"
+      ? getAccountSet(pick.target.provider)?.activeAccountId
+      : undefined;
     const childBody = concreteComboRequestBody(
       rawBody,
       pick.target,
@@ -525,6 +535,33 @@ export async function handleComboResponses(
         activeAttemptStartedAt: undefined,
       });
       return lastFailure;
+    }
+    if (isAccountRetryableComboFailure(response.status)) {
+      const codexAccountId = resolvedAuth?.kind === "pool" || resolvedAuth?.kind === "main-pool"
+        ? resolvedAuth.accountId
+        : undefined;
+      if (codexAccountId) {
+        const attempted = attemptedCodexAccounts.get(targetId) ?? new Set<string>();
+        attemptedCodexAccounts.set(targetId, attempted);
+        const next = rotateCodexComboAccount(config, codexAccountId, attempted);
+        if (next) {
+          console.warn(`[combo] ${comboId}: retrying ${targetId} with another Codex pool account`);
+          continue;
+        }
+      } else if (oauthAccountId) {
+        const attempted = attemptedOAuthAccounts.get(targetId) ?? new Set<string>();
+        attemptedOAuthAccounts.set(targetId, attempted);
+        const next = await rotateOAuthComboAccount(
+          pick.target.provider,
+          oauthAccountId,
+          attempted,
+          response.status,
+        );
+        if (next) {
+          console.warn(`[combo] ${comboId}: retrying ${targetId} with another OAuth account`);
+          continue;
+        }
+      }
     }
     console.warn(
       `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${response.status} after ${Date.now() - started}ms`,

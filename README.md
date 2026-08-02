@@ -162,6 +162,9 @@ Combo aliases are exact public model ids and may be bare names or use a custom n
 combo alias exactly matches a configured non-OpenAI `provider/model` selector, the combo
 intentionally takes precedence in routing, `/v1/models`, and the Codex catalog. Renaming that
 alias or deleting the combo immediately restores the physical provider selector.
+Within a failover combo, an OpenAI Codex-account target exhausts the healthy account pool before
+the combo advances to the next provider. OAuth targets with multiple registered accounts likewise
+retry each healthy account before advancing.
 
 Routed models also appear in the **Codex App** model picker with per-model reasoning effort controls:
 
