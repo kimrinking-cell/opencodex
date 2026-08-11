@@ -1650,6 +1650,52 @@ describe("server combo failover 030 activation matrix", () => {
     expect(cancels).toBe(0);
   });
 
+  test("HTTP 200 native stream failure before output advances to the backup", async () => {
+    const hits: string[] = [];
+    const terminalFrame = (status: "failed" | "completed", text?: string) => [
+      ...(text ? [
+        "event: response.output_text.delta",
+        `data: ${JSON.stringify({ type: "response.output_text.delta", delta: text })}`,
+        "",
+      ] : []),
+      `event: response.${status}`,
+      `data: ${JSON.stringify({
+        type: `response.${status}`,
+        response: {
+          id: `resp_${status}`,
+          status,
+          output: [],
+          ...(status === "failed"
+            ? { error: { type: "server_error", code: "upstream_server_error", message: "primary stalled" } }
+            : {}),
+        },
+      })}`,
+      "",
+      "",
+    ].join("\n");
+    const a = serve(async request => {
+      hits.push(String((await request.json() as { model?: unknown }).model));
+      return new Response(terminalFrame("failed"), {
+        headers: { "content-type": "text/event-stream" },
+      });
+    });
+    const b = serve(async request => {
+      hits.push(String((await request.json() as { model?: unknown }).model));
+      return new Response(terminalFrame("completed", "backup"), {
+        headers: { "content-type": "text/event-stream" },
+      });
+    });
+    const config = comboConfig({
+      a: provider("openai-responses", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(b), "key-b"),
+    });
+
+    const response = await post(config, { stream: true });
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await collectSse(response))).toContain("backup");
+    expect(hits).toEqual(["m1", "m2"]);
+  });
+
   test("connect cancellation wins with 499, no backup, warning, or cooldown", async () => {
     let bHits = 0;
     const aStarted = deferred();

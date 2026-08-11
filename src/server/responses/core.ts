@@ -182,6 +182,7 @@ import {
   agentTaskRecoveryConfig,
   recoverEncryptedAgentTask,
 } from "./agent-task-recovery";
+import { preflightNativeComboStream } from "../combo-stream-preflight";
 import { relaySseEagerBounded } from "../relay-eager";
 import {
   relayResponsesSseWithTerminalRepair,
@@ -1298,6 +1299,16 @@ export async function handleComboResponses(
       callbackGate.discard();
       retainCancelledAttempt();
       return clientCancelledResponse();
+    }
+
+    if (response.ok) {
+      const preflight = await preflightNativeComboStream(response, options.abortSignal);
+      if (preflight.kind === "cancelled") {
+        callbackGate.discard();
+        retainCancelledAttempt();
+        return clientCancelledResponse();
+      }
+      response = preflight.response;
     }
 
     if (response.ok) {
