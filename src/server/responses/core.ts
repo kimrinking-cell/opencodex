@@ -164,6 +164,7 @@ import {
   relayWithAbort,
   sanitizePassthroughHeaders,
 } from "../relay";
+import { preflightNativeComboStream } from "../combo-stream-preflight";
 import { relaySseEagerBounded } from "../relay-eager";
 import { isWin32EagerRewrite, selectEagerPath } from "../../lib/bun-stream-caps";
 import { cancelBodyOnAbort } from "../../lib/abort";
@@ -1204,6 +1205,16 @@ export async function handleComboResponses(
       callbackGate.discard();
       retainCancelledAttempt();
       return clientCancelledResponse();
+    }
+
+    if (response.ok) {
+      const preflight = await preflightNativeComboStream(response, options.abortSignal);
+      if (preflight.kind === "cancelled") {
+        callbackGate.discard();
+        retainCancelledAttempt();
+        return clientCancelledResponse();
+      }
+      response = preflight.response;
     }
 
     if (response.ok) {
