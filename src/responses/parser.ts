@@ -151,6 +151,21 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
     if (namespace) tool.namespace = namespace;
     out.push(tool);
   };
+  /**
+   * Custom policy (ported from the local 2.6.0 patch): preserve a custom tool's grammar in the
+   * parameter description. Dropping it makes chat models invent a unified diff or another
+   * format instead of following the declared grammar.
+   */
+  const customToolInputDescription = (tool: Record<string, unknown>): string => {
+    const base = "Raw tool input. Send the complete body verbatim in this string; do not wrap it in another JSON object.";
+    if (!isObj(tool.format) || tool.format.type !== "grammar") return base;
+    const definition = typeof tool.format.definition === "string" ? tool.format.definition.trim() : "";
+    if (!definition) return base;
+    const syntax = typeof tool.format.syntax === "string" && tool.format.syntax.trim()
+      ? tool.format.syntax.trim()
+      : "grammar";
+    return `${base}\nThe input MUST match this ${syntax} grammar exactly:\n${definition}`;
+  };
   for (const t of tools) {
     if (!isObj(t)) continue;
     if (t.type === "function" && typeof t.name === "string") {
@@ -170,7 +185,7 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
       out.push({
         name: t.name,
         description: (t.description as string) ?? "",
-        parameters: { type: "object", properties: { input: { type: "string", description: "Raw tool input. For apply_patch, begin exactly with `*** Begin Patch` (no trailing `***`), then use its standard patch envelope." } }, required: ["input"] },
+        parameters: { type: "object", properties: { input: { type: "string", description: customToolInputDescription(t) } }, required: ["input"] },
         freeform: true,
       });
     }

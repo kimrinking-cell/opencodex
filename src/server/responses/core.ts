@@ -234,7 +234,7 @@ export function sidecarOutcomeRecorder(
 
 
 
-import { isShadowSourceModel, shouldInterceptShadowCall } from "../../lib/shadow-call";
+import { isShadowSourceModel, shadowInterceptEffort, shouldInterceptShadowCall } from "../../lib/shadow-call";
 
 export { DEFAULT_SHADOW_SOURCE_MODELS, isShadowSourceModel, shadowSourceModels } from "../../lib/shadow-call";
 
@@ -1481,9 +1481,12 @@ async function handleResponsesInner(
       (parsed._rawBody as { model?: string }).model = _sci.model;
     }
     // Force effort to low for shadow/helper calls (matching upstream behavior)
-    parsed.options.reasoning = "low";
+    // Custom policy (restored from the pre-2.10.2 behavior): honor the configured
+    // `shadowCallIntercept.effort` instead of hardcoding low; default stays low.
+    const sciEffort = shadowInterceptEffort(_sci.effort);
+    parsed.options.reasoning = sciEffort;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
-      (parsed._rawBody as Record<string, unknown>).reasoning = { effort: "low" };
+      (parsed._rawBody as Record<string, unknown>).reasoning = { effort: sciEffort };
     }
     (logCtx as unknown as Record<string, unknown>).shadowCallRewrittenFrom = _sciOriginal;
     // Helpers must not resume/append into the parent thread's Cursor conversation.

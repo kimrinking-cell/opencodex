@@ -209,7 +209,18 @@ export function modelInList(list: string[] | undefined, modelId: string): boolea
   if (!list || list.length === 0) return false;
   if (list.includes(modelId)) return true;
   const colon = modelId.indexOf(":");
-  return colon > 0 && list.includes(modelId.slice(0, colon));
+  const family = colon > 0 ? modelId.slice(0, colon) : undefined;
+  if (family && list.includes(family)) return true;
+  // Custom policy (ported from the local 2.6.0 patch): case-insensitive prefix wildcards
+  // (`qwen*`) match the full id or the family before a ":size" tag.
+  const folded = modelId.toLowerCase();
+  const foldedFamily = family?.toLowerCase();
+  return list.some(entry => {
+    const pattern = entry.toLowerCase();
+    if (!pattern.endsWith("*")) return false;
+    const prefix = pattern.slice(0, -1);
+    return folded.startsWith(prefix) || (foldedFamily?.startsWith(prefix) ?? false);
+  });
 }
 
 export type OcxToolChoice =
@@ -314,6 +325,13 @@ export type AdapterEvent =
       stopReason?: string;
       endTurn?: boolean;
       providerState?: OcxProviderContinuationState;
+      /** Custom policy (ported from the local 2.6.0 patch): raw upstream terminal metadata
+       * surfaced on the Responses object as `metadata.ocx_upstream`. */
+      finishReason?: string;
+      upstreamStopReason?: string | null;
+      contentCharacters?: number;
+      reasoningCharacters?: number;
+      toolCallCount?: number;
     }
   | {
       type: "incomplete";
@@ -744,6 +762,8 @@ export interface OcxConfig {
     model?: string;
     /** Optional override of intercepted source-model prefixes (default: gpt-5.4-mini, gpt-5.6-luna). */
     sourceModels?: string[];
+    /** Custom policy: effort for rewritten helper calls (default "low" when unset/invalid). */
+    effort?: string;
   };
   /**
    * 3-state multi-agent surface override:
@@ -1402,6 +1422,12 @@ export interface OcxProviderConfig {
   autoToolChoiceOnlyModels?: string[];
   /** Model ids that expect prior assistant `reasoning_content` to be preserved in chat history. */
   preserveReasoningContentModels?: string[];
+  /** Custom policy (ported from the local 2.6.0 patch): model ids whose Codex tool schemas must
+   * not be forwarded to the upstream chat API. */
+  noToolModels?: string[];
+  /** Custom policy (ported from the local 2.6.0 patch): model-specific JSON body fields merged
+   * verbatim into openai-chat requests. */
+  modelExtraBody?: Record<string, Record<string, unknown>>;
   /**
    * Model ids whose upstream hard-rejects a tool_call continuation missing
    * `reasoning_content` (DeepSeek thinking mode: HTTP 400). When the replay

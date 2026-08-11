@@ -1,3 +1,5 @@
+import { isCodexReasoningEffort } from "../reasoning-effort";
+
 /**
  * Shadow-call intercept source models.
  *
@@ -51,4 +53,15 @@ export function shouldInterceptShadowCall(
   } catch {
     return true;
   }
+}
+
+/**
+ * Custom policy (restored from the pre-2.10.2 behavior): resolve the replacement helper
+ * effort from `shadowCallIntercept.effort`, preserving the legacy low default. Upstream
+ * 2.10.2 hardcoded "low" and silently dropped the configured value.
+ */
+export function shadowInterceptEffort(configured?: unknown): string {
+  return typeof configured === "string" && isCodexReasoningEffort(configured)
+    ? configured
+    : "low";
 }

@@ -383,7 +383,7 @@ export function bridgeToResponsesSSE(
       const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec);
       const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
 
-      let currentMsg: { itemId: string; outputIndex: number; text: string; textBytes: number; phase?: OcxMessagePhase } | null = null;
+      let currentMsg: { itemId: string; outputIndex: number; text: string; textBytes: number; phase?: OcxMessagePhase; started: boolean } | null = null;
       let currentReasoning: { itemId: string; outputIndex: number; text: string; textBytes: number } | null = null;
       let currentRawReasoning: { itemId: string; outputIndex: number; text: string; textBytes: number } | null = null;
       // Anthropic extended-thinking round-trip state: the signature signs the CURRENT thinking
@@ -838,18 +838,7 @@ export function bridgeToResponsesSSE(
                 closeCurrentMessage("commentary");
               }
               if (!currentMsg) {
-                const itemId = `msg_${uuid()}`;
-                const item = {
-                  type: "message", id: itemId, status: "in_progress", role: "assistant",
-                  content: [] as { type: string; text: string; annotations: never[] }[],
-                  ...(event.phase ? { phase: event.phase } : {}),
-                };
-                emit("response.output_item.added", { output_index: outputIndex, item });
-                emit("response.content_part.added", {
-                  item_id: itemId, output_index: outputIndex, content_index: 0,
-                  part: { type: "output_text", text: "", annotations: [] },
-                });
-                currentMsg = { itemId, outputIndex, text: "", textBytes: 0, ...(event.phase ? { phase: event.phase } : {}) };
+                currentMsg = { itemId: `msg_${uuid()}`, outputIndex, text: "", textBytes: 0, started: false, ...(event.phase ? { phase: event.phase } : {}) };
               }
               ({ value: currentMsg.text, bytes: currentMsg.textBytes } = appendString(
                 currentMsg.text,
@@ -857,6 +846,29 @@ export function bridgeToResponsesSSE(
                 event.text,
                 "retained_collectors",
               ));
+              // Custom policy (ported from the local 2.6.0 patch): delay the Responses message
+              // item until the accumulated text contains something visible. Chat templates
+              // (Qwen and similar) commonly stream separator newlines before a function call;
+              // eagerly opening a message for those bytes leaves a blank agent message in Codex.
+              if (!currentMsg.started) {
+                if (currentMsg.text.trim().length === 0) break;
+                const item = {
+                  type: "message", id: currentMsg.itemId, status: "in_progress", role: "assistant",
+                  content: [] as { type: string; text: string; annotations: never[] }[],
+                  ...(currentMsg.phase ? { phase: currentMsg.phase } : {}),
+                };
+                emit("response.output_item.added", { output_index: currentMsg.outputIndex, item });
+                emit("response.content_part.added", {
+                  item_id: currentMsg.itemId, output_index: currentMsg.outputIndex, content_index: 0,
+                  part: { type: "output_text", text: "", annotations: [] },
+                });
+                currentMsg.started = true;
+                emit("response.output_text.delta", {
+                  item_id: currentMsg.itemId, output_index: currentMsg.outputIndex,
+                  content_index: 0, delta: currentMsg.text,
+                });
+                break;
+              }
               emit("response.output_text.delta", {
                 item_id: currentMsg.itemId, output_index: currentMsg.outputIndex,
                 content_index: 0, delta: event.text,
@@ -1090,6 +1102,15 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "done": {
+              // Custom policy (ported from the local 2.6.0 patch): raw upstream terminal
+              // metadata for diagnostics, surfaced as response.metadata.ocx_upstream.
+              const ocxUpstream = {
+                finish_reason: event.finishReason ?? null,
+                stop_reason: event.upstreamStopReason ?? null,
+                content_characters: event.contentCharacters ?? 0,
+                reasoning_characters: event.reasoningCharacters ?? 0,
+                tool_call_count: event.toolCallCount ?? 0,
+              };
               if (currentMsg) closeCurrentMessage(event.stopReason ? undefined : "final_answer");
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
@@ -1121,6 +1142,7 @@ export function bridgeToResponsesSSE(
                   incomplete_details: {
                     reason: event.stopReason === "max_tokens" ? "max_output_tokens" : "content_filter",
                   },
+                  metadata: { ocx_upstream: ocxUpstream },
                 };
                 // Cache max-output partials so previous_response_id replay can continue them;
                 // rememberResponseState rejects content-filtered incomplete responses.
@@ -1129,7 +1151,7 @@ export function bridgeToResponsesSSE(
                 emit("response.incomplete", { response });
                 reportTerminal("incomplete");
               } else {
-                const response = { ...responseSnapshot("completed", finishedItems, event.endTurn), usage: responsesUsage(event.usage) };
+                const response = { ...responseSnapshot("completed", finishedItems, event.endTurn), usage: responsesUsage(event.usage), metadata: { ocx_upstream: ocxUpstream } };
                 options?.onCompletedResponse?.(response, event.providerState);
                 options?.onUsage?.(event.usage);
                 emit("response.completed", {
@@ -1412,6 +1434,9 @@ function buildResponseJSONWithBudget(
   let endTurn: boolean | undefined;
   let stopReason: string | undefined;
   let cleanDone = false;
+  // Custom policy (ported from the local 2.6.0 patch): raw upstream terminal metadata captured
+  // from the adapter done event (non-streaming JSON responses).
+  let ocxUpstreamMeta: Record<string, unknown> | undefined;
   let compactionText = "";
   let compactionTextBytes = 0;
 
@@ -1709,6 +1734,13 @@ function buildResponseJSONWithBudget(
         if (e.providerState) options?.onProviderState?.(e.providerState);
         // Match streaming: max_tokens and content_filter both terminate as incomplete.
         if (e.stopReason === "max_tokens" || e.stopReason === "content_filter") stopReason = e.stopReason;
+        ocxUpstreamMeta = {
+          finish_reason: e.finishReason ?? null,
+          stop_reason: e.upstreamStopReason ?? null,
+          content_characters: e.contentCharacters ?? 0,
+          reasoning_characters: e.reasoningCharacters ?? 0,
+          tool_call_count: e.toolCallCount ?? 0,
+        };
         break;
     }
     if (budget) releaseTranslatedEvent(e, budget);
@@ -1765,6 +1797,7 @@ function buildResponseJSONWithBudget(
     } : stopReason === "content_filter" ? {
       incomplete_details: { reason: "content_filter" },
     } : {}),
+    ...(ocxUpstreamMeta ? { metadata: { ocx_upstream: ocxUpstreamMeta } } : {}),
     usage: responsesUsage(incompleteEvent?.usage ?? usage),
   };
 }

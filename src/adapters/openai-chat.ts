@@ -672,11 +672,15 @@ function usageFromOpenAIChat(usage: Record<string, unknown> | undefined): OcxUsa
   if (!usage) return undefined;
   const promptDetails = usage.prompt_tokens_details as Record<string, number> | undefined;
   const completionDetails = usage.completion_tokens_details as Record<string, number> | undefined;
+  // Custom policy (ported from the local 2.6.0 patch): some gateways report reasoning tokens at
+  // the usage top level instead of completion_tokens_details.
+  const reasoningTokens = completionDetails?.reasoning_tokens
+    ?? (typeof usage.reasoning_tokens === "number" ? usage.reasoning_tokens : undefined);
   return {
     inputTokens: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : 0,
     outputTokens: typeof usage.completion_tokens === "number" ? usage.completion_tokens : 0,
     ...(promptDetails?.cached_tokens !== undefined ? { cachedInputTokens: promptDetails.cached_tokens } : {}),
-    ...(completionDetails?.reasoning_tokens !== undefined ? { reasoningOutputTokens: completionDetails.reasoning_tokens } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningOutputTokens: reasoningTokens } : {}),
   };
 }
 
@@ -713,7 +717,11 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
 
       const messages = messagesToChatFormat(parsed, provider);
-      const tools = toolsToChatFormatForProvider(parsed, provider);
+      // Custom policy (ported from the local 2.6.0 patch): some chat models reject Codex tool
+      // schemas entirely; drop them per model instead of failing the request.
+      const tools = modelInList(provider.noToolModels, parsed.modelId)
+        ? undefined
+        : toolsToChatFormatForProvider(parsed, provider);
       const toolChoice = toolChoiceToChatFormat(parsed.options.toolChoice, parsed.context.tools, provider);
 
       const body: Record<string, unknown> = {
@@ -809,6 +817,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
       if (parsed.options.frequencyPenalty !== undefined && !modelInList(provider.noPenaltyModels, parsed.modelId)) {
         body.frequency_penalty = parsed.options.frequencyPenalty;
+      }
+      // Custom policy (ported from the local 2.6.0 patch): per-model JSON body fields merged
+      // verbatim into the request (gateway switches not covered by typed provider fields).
+      const extraBody = provider.modelExtraBody?.[parsed.modelId];
+      if (extraBody && typeof extraBody === "object" && !Array.isArray(extraBody)) {
+        Object.assign(body, extraBody);
       }
       if (provider.promptCacheKey && parsed.options.promptCacheKey !== undefined) {
         body.prompt_cache_key = parsed.options.promptCacheKey;
@@ -908,6 +922,25 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       };
       let pendingUsage: OcxUsage | undefined;
       let finishReason: string | undefined;
+      // Custom policy (ported from the local 2.6.0 patch): raw upstream terminal metadata for
+      // the bridge's ocx_upstream response metadata.
+      let upstreamStopReason: string | null | undefined;
+      let contentCharacters = 0;
+      let reasoningCharacters = 0;
+      let toolCallCount = 0;
+      const doneEventWithMeta = (): AdapterEvent => {
+        const stopReason = stopReasonFor(finishReason);
+        return {
+          type: "done",
+          usage: pendingUsage,
+          ...(stopReason ? { stopReason } : {}),
+          ...(finishReason ? { finishReason } : {}),
+          ...(upstreamStopReason !== undefined ? { upstreamStopReason } : {}),
+          contentCharacters,
+          reasoningCharacters,
+          toolCallCount,
+        };
+      };
       let sawUserFacingOutput = false;
 
       const handleDataLine = function* (line: string): Generator<AdapterEvent, "continue" | "terminate"> {
@@ -917,8 +950,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         if (payload.length === 0) return "continue";
         if (payload === "[DONE]") {
           yield* flushToolCalls();
-          const stopReason = stopReasonFor(finishReason);
-          yield { type: "done", usage: pendingUsage, ...(stopReason ? { stopReason } : {}) };
+          yield doneEventWithMeta();
           return "terminate";
         }
 
@@ -951,6 +983,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const choice = rawChoice as {
           delta?: Record<string, unknown>;
           finish_reason?: string;
+          stop_reason?: string | null;
           error?: unknown;
         };
         if (choice.finish_reason === "error") {
@@ -959,12 +992,17 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           return yield* terminateWithError(event);
         }
         if (typeof choice.finish_reason === "string" && choice.finish_reason) finishReason = choice.finish_reason;
+        if ("stop_reason" in choice && (typeof choice.stop_reason === "string" || choice.stop_reason === null)) upstreamStopReason = choice.stop_reason;
         const delta = choice.delta;
         if (delta) {
           const reasoningText = reasoningTextFrom(delta);
-          if (reasoningText !== undefined) yield { type: "reasoning_raw_delta", text: reasoningText };
+          if (reasoningText !== undefined) {
+            reasoningCharacters += reasoningText.length;
+            yield { type: "reasoning_raw_delta", text: reasoningText };
+          }
           if (typeof delta.content === "string" && delta.content.length > 0) {
             sawUserFacingOutput = true;
+            contentCharacters += delta.content.length;
             yield { type: "text_delta", text: delta.content };
           }
 
@@ -995,6 +1033,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               if (!call) {
                 call = { key: key ?? `seq:${pendingToolCalls.length}`, id: "", name: "", args: "", argsBytes: 0 };
                 pendingToolCalls.push(call);
+                toolCallCount = pendingToolCalls.length;
                 budget.openCall(call.key);
               }
               if (tc.id && !call.id) call.id = tc.id;
@@ -1079,8 +1118,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           return;
         }
         yield* flushToolCalls();
-        const stopReason = stopReasonFor(finishReason);
-        yield { type: "done", usage: pendingUsage, ...(stopReason ? { stopReason } : {}) };
+        yield doneEventWithMeta();
       } catch (error) {
         if (isTranslatorBudgetExceededError(error)
           || (error instanceof Error && (error.cause as { code?: unknown } | undefined)?.code === "translation_buffer_limit")) {
