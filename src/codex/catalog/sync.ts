@@ -31,7 +31,7 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
+import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline, suppressRoutedPluginAndAppUsageInstructions } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import { applyNativeVisibility, CODEX_NATIVE_ALIAS_CATALOG_KIND, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, isNativeAliasCatalogEntry, isUnsupportedOpenAiNativeSlug, NATIVE_OPENAI_MODELS, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry } from "./metadata";
 import {
@@ -315,6 +315,7 @@ export function deriveEntry(
   };
   if (isRouted) {
     applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+    suppressRoutedPluginAndAppUsageInstructions(entry);
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);

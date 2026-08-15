@@ -83,7 +83,10 @@ visibility = "list"
 
 The clone keeps strict-parser fields such as reasoning levels, shell type, API support flags, and
 base instructions. opencodex then removes native-only capabilities that the route cannot honor,
-including OpenAI service-tier metadata.
+including OpenAI service-tier metadata. Routed rows also pin
+`include_plugin_usage_instructions` and `include_apps_usage_instructions` to `false`, because Codex
+treats those keys as on for non-native slugs and would otherwise inject plugin and app-connector
+usage instructions into the first turn. Native GPT-5.6 rows keep their upstream omission (off).
 
 ## Current stable model coverage
 

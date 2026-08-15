@@ -355,6 +355,16 @@ export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode, v
   return entries;
 }
 
+/**
+ * Codex treats omitted plugin/app usage flags as on for non-native catalog slugs, which
+ * dumps plugin and app-connector instructions into the first turn. Native GPT-5.6 omits
+ * the keys (off). Pin false so routed rows cannot inherit a template true or the custom-model default.
+ */
+export function suppressRoutedPluginAndAppUsageInstructions(entry: RawEntry): void {
+  entry.include_plugin_usage_instructions = false;
+  entry.include_apps_usage_instructions = false;
+}
+
 export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls = false): RawEntry {
   delete entry.model_messages;
   delete entry.tool_mode;
@@ -368,6 +378,7 @@ export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls =
   // Routed rows cloned from native templates must not inherit OpenAI-only summary delivery.
   // Per-model routed opt-ins can be added once provider metadata exposes this capability.
   delete entry.supports_reasoning_summaries;
+  suppressRoutedPluginAndAppUsageInstructions(entry);
   const isCursorEntry = typeof entry.slug === "string" && entry.slug.startsWith("cursor/");
   // Routed providers use opencodex sidecars and client-executed tool discovery. The sidecar
   // runs through native gpt-5.4-mini, so image search is available and verbalized for text-only

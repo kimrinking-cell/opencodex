@@ -8,6 +8,9 @@
   gpt-5.6 natives from the pinned upstream models.json snapshot
   (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra);
 - clones a native template for routed `provider/model` entries;
+- pins `include_plugin_usage_instructions` and `include_apps_usage_instructions` to `false` on
+  routed rows so Codex does not dump plugin/app-connector usage text into extra-model first turns
+  (omitted keys default to on for non-native slugs);
 - forces strict Codex catalog fields required by the current parser;
 - hides `disabledModels` without blocking direct routing (routed provider ids are excluded;
   account-qualified native ids hide only that selector row; BARE native slugs hide the bare row

@@ -57,7 +57,7 @@ display_name = "anthropic/claude-sonnet-..."
 visibility = "list"
 ```
 
-克隆会保留严格解析器字段，例如 reasoning 档位、shell 类型、API 支持标志和 base instructions。随后，opencodex 会移除该路由无法兑现的仅原生能力，包括 OpenAI service-tier 元数据。
+克隆会保留严格解析器字段，例如 reasoning 档位、shell 类型、API 支持标志和 base instructions。随后，opencodex 会移除该路由无法兑现的仅原生能力，包括 OpenAI service-tier 元数据。路由条目还会把 `include_plugin_usage_instructions` 和 `include_apps_usage_instructions` 固定为 `false`：Codex 对非原生 slug 把缺省键视为开启，否则会在首轮注入插件和 app connector 用法说明。原生 GPT-5.6 行保持上游的省略（关闭）。
 
 ## 当前稳定模型覆盖
 

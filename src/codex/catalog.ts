@@ -1,6 +1,6 @@
 // AUTO-SPLIT facade: original catalog.ts body moved into ./catalog/* modules.
 // Public surface preserved exactly; importers keep using "src/codex/catalog".
-export { isMediaGenerationModelId, shouldExposeRoutedModel, readCodexCatalogPath, readCatalog, normalizeRoutedCatalogEntry, catalogModelSlug, filterSupportedNativeSlugs, catalogModelSupportsReasoningSummaries } from "./catalog/parsing";
+export { isMediaGenerationModelId, shouldExposeRoutedModel, readCodexCatalogPath, readCatalog, normalizeRoutedCatalogEntry, suppressRoutedPluginAndAppUsageInstructions, catalogModelSlug, filterSupportedNativeSlugs, catalogModelSupportsReasoningSummaries } from "./catalog/parsing";
 export type { CatalogModel, MultiAgentMode } from "./catalog/parsing";
 export { CODEX_NATIVE_ALIAS_CATALOG_KIND, NATIVE_OPENAI_MODELS, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, isNativeAliasCatalogEntry, nativeOpenAiContextWindow, disabledNativeSlugs, visibleNativeSlugs, desktopVisibleNativeSlugs, nativeModelRows, applyNativeVisibility, upstreamNativeEntry, nativeOpenAiSlugs, listCatalogNativeSlugs, nativeInputModalities, nativeReasoningEfforts, nativeDefaultReasoningEffort, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi } from "./catalog/metadata";
 export { isSpawnableCodexCandidate, codexExecInvocation, loadBundledCodexCatalog, materializeBundledCodexCatalog, loadCatalogTemplate } from "./catalog/bundled";

@@ -88,6 +88,8 @@ describe("Phase 100 Codex-native parity smoke", () => {
     expect(routed).not.toHaveProperty("model_messages");
     expect(routed).not.toHaveProperty("use_responses_lite");
     expect(routed).not.toHaveProperty("supports_websockets");
+    expect(routed?.include_plugin_usage_instructions).toBe(false);
+    expect(routed?.include_apps_usage_instructions).toBe(false);
 
     const parsed = parseRequest({
       model: "opencode-go/deepseek-v4-pro",

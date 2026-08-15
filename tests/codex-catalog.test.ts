@@ -326,6 +326,8 @@ describe("combo catalog capability intersection", () => {
       expect(row).not.toHaveProperty("tool_mode");
       expect(row.web_search_tool_type).toBe("text_and_image");
       expect(row.supports_search_tool).toBe(true);
+      expect(row.include_plugin_usage_instructions).toBe(false);
+      expect(row.include_apps_usage_instructions).toBe(false);
     }
   });
 
@@ -2247,6 +2249,31 @@ describe("Codex catalog routed normalization", () => {
     expect(entry).not.toHaveProperty("default_service_tier");
     expect(entry.web_search_tool_type).toBe("text_and_image");
     expect(entry.supports_search_tool).toBe(true);
+    expect(entry.include_plugin_usage_instructions).toBe(false);
+    expect(entry.include_apps_usage_instructions).toBe(false);
+  });
+
+  test("normalizeRoutedCatalogEntry pins plugin/app usage off even when the template enables them", () => {
+    const entry = {
+      ...nativeTemplate(),
+      include_plugin_usage_instructions: true,
+      include_apps_usage_instructions: true,
+    };
+
+    normalizeRoutedCatalogEntry(entry);
+
+    expect(entry.include_plugin_usage_instructions).toBe(false);
+    expect(entry.include_apps_usage_instructions).toBe(false);
+  });
+
+  test("template-less routed fallback still pins plugin/app usage off", () => {
+    const entries = buildCatalogEntries(null, [], [
+      { provider: "opencode-go", id: "deepseek-v4-flash" },
+    ]);
+    const routed = entries.find(e => e.slug === "opencode-go/deepseek-v4-flash");
+
+    expect(routed?.include_plugin_usage_instructions).toBe(false);
+    expect(routed?.include_apps_usage_instructions).toBe(false);
   });
 
   test("buildCatalogEntries strips routed entries cloned from native templates", () => {
@@ -2269,6 +2296,8 @@ describe("Codex catalog routed normalization", () => {
     expect(routed).not.toHaveProperty("default_service_tier");
     expect(routed?.web_search_tool_type).toBe("text_and_image");
     expect(routed?.supports_search_tool).toBe(true);
+    expect(routed?.include_plugin_usage_instructions).toBe(false);
+    expect(routed?.include_apps_usage_instructions).toBe(false);
     expect(routed?.supports_reasoning_summaries).toBe(false);
     expect(routed?.base_instructions).not.toBe(nativeTemplate().base_instructions);
     expect(routed?.base_instructions).toContain("claude-sonnet-4-6");
@@ -2518,6 +2547,8 @@ describe("Codex catalog routed normalization", () => {
     expect(native?.supports_websockets).toBeUndefined();
     expect(native?.web_search_tool_type).toBe("text_and_image");
     expect(native?.supports_search_tool).toBe(true);
+    expect(native).not.toHaveProperty("include_plugin_usage_instructions");
+    expect(native).not.toHaveProperty("include_apps_usage_instructions");
     expect(native?.service_tier).toBe("priority");
     expect(native?.service_tiers).toEqual([{ id: "priority" }]);
   });

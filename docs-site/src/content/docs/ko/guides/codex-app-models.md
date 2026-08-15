@@ -67,7 +67,10 @@ visibility = "list"
 
 복제본에는 reasoning level, shell type, API 지원 플래그, base instructions처럼 엄격한 파서가 요구하는
 필드가 그대로 남습니다. 그다음 opencodex는 해당 라우트가 감당할 수 없는 OpenAI service-tier 메타데이터
-같은 네이티브 전용 기능을 제거합니다.
+같은 네이티브 전용 기능을 제거합니다. 라우팅된 행은 `include_plugin_usage_instructions`와
+`include_apps_usage_instructions`를 `false`로 고정합니다. Codex는 이 키가 없는 비네이티브 slug를
+켜진 것으로 취급해서, 그대로 두면 첫 턴에 플러그인·앱 커넥터 사용법이 주입됩니다. 네이티브 GPT-5.6
+행은 업스트림처럼 키를 생략한 채(꺼짐) 유지합니다.
 
 ## 현재 안정 모델 범위
 
