@@ -8,6 +8,8 @@ import {
   identifyRoutedModel,
   NEUTRAL_IDENTITY_LINE,
   neutralizeIdentity,
+  ROUTED_COMMENTARY_TOOL_PREFIX,
+  ROUTED_COMMENTARY_TOOL_REPLACEMENT,
 } from "../src/adapters/identity";
 import { createGoogleAdapter } from "../src/adapters/google";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
@@ -114,6 +116,29 @@ describe("identity neutralization — central helper", () => {
     const out = identifyRoutedModel(SYS, "x".repeat(129));
     expect(out).toContain("powered by the configured model");
     expect(out).toContain("identify as configured model");
+  });
+
+  test("routed identity strips GPT-5 commentary-before-every-tool and 60s spam", () => {
+    const src = [
+      "You are Codex, an agent based on GPT-5.",
+      ROUTED_COMMENTARY_TOOL_PREFIX,
+      "Explicitly tell the user in the `commentary` channel whenever a skill causes you to take an action or pause your work.",
+      "- First, tell the user in the commentary channel **why** you are using the skill.",
+    ].join("\n\n");
+    const out = identifyRoutedModel(src, "meta/muse-spark-1.2-contributor");
+    expect(out).toContain("powered by the meta/muse-spark-1.2-contributor");
+    expect(out).not.toContain("start with a message in the `commentary` channel");
+    expect(out).not.toContain("more than 60 seconds");
+    expect(out).not.toContain("commentary channel **why**");
+    expect(out).toContain(ROUTED_COMMENTARY_TOOL_REPLACEMENT);
+    expect(out.match(/Do not restate or paraphrase a pending action you already announced/g)?.length).toBe(1);
+  });
+
+  test("routed identity appends the anti-repeat rule when commentary exists without the 60s paragraph", () => {
+    const src = "You are Codex, an agent based on GPT-5.\n\nYou share updates in the `commentary` channel.";
+    const out = identifyRoutedModel(src, "grok-4.5");
+    expect(out).toContain(ROUTED_COMMENTARY_TOOL_REPLACEMENT);
+    expect(out).not.toContain("start with a message in the `commentary` channel");
   });
 });
 

@@ -8,6 +8,7 @@ import {
   CODEX_PROVIDER_MODEL_CATALOG_KIND,
   findNativeTemplate,
 } from "../src/codex/catalog/parsing";
+import { ROUTED_COMMENTARY_TOOL_PREFIX, ROUTED_COMMENTARY_TOOL_REPLACEMENT } from "../src/adapters/identity";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 import {
   CURSOR_STATIC_MODELS,
@@ -2274,6 +2275,23 @@ describe("Codex catalog routed normalization", () => {
 
     expect(routed?.include_plugin_usage_instructions).toBe(false);
     expect(routed?.include_apps_usage_instructions).toBe(false);
+  });
+
+  test("routed clones drop GPT-5 commentary-before-every-tool spam", () => {
+    const template = {
+      ...nativeTemplate(),
+      base_instructions: [
+        "You are Codex, an agent based on GPT-5.",
+        ROUTED_COMMENTARY_TOOL_PREFIX,
+      ].join("\n\n"),
+    };
+    const entries = buildCatalogEntries(template, [], [
+      { provider: "commandcode", id: "meta/muse-spark-1.2-contributor" },
+    ]);
+    const routed = entries.find(e => e.slug === "commandcode/meta-muse-spark-1.2-contributor");
+    expect(routed?.base_instructions).toContain("powered by the meta/muse-spark-1.2-contributor");
+    expect(routed?.base_instructions).not.toContain("more than 60 seconds");
+    expect(routed?.base_instructions).toContain(ROUTED_COMMENTARY_TOOL_REPLACEMENT);
   });
 
   test("buildCatalogEntries strips routed entries cloned from native templates", () => {
