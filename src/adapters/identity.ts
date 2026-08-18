@@ -73,6 +73,12 @@ export const ROUTED_COMMENTARY_TOOL_PREFIX =
 export const ROUTED_COMMENTARY_TOOL_REPLACEMENT =
   "If the user's request requires calling tools, call the tool. Send commentary only when the user-visible state changed, a tool failed, or you are blocked. Do not restate or paraphrase a pending action you already announced, and do not send commentary before every tool call.";
 
+const ROUTED_COMMENTARY_AS_YOU_WORK =
+  "As you work, you send messages to the `commentary` channel. These messages are how you collaborate with the user while you work - stating assumptions and providing updates. These messages should be concise and quickly scannable. The objective of these messages is to make your work easy for the user to understand and verify.";
+
+const ROUTED_COMMENTARY_AS_YOU_WORK_REPLACEMENT =
+  "Keep the `commentary` and `final` channels. Do not narrate each tool call. Send commentary only for a real status change, a failure, or a blocker.";
+
 const ROUTED_COMMENTARY_SKILL_WHY =
   "First, tell the user in the commentary channel **why** you are using the skill.";
 
@@ -90,6 +96,7 @@ const ROUTED_COMMENTARY_ANTIREPEAT =
 
 export function softenRoutedCommentaryInstructions(systemText: string): string {
   let out = systemText.split(ROUTED_COMMENTARY_TOOL_PREFIX).join(ROUTED_COMMENTARY_TOOL_REPLACEMENT);
+  out = out.split(ROUTED_COMMENTARY_AS_YOU_WORK).join(ROUTED_COMMENTARY_AS_YOU_WORK_REPLACEMENT);
   out = out.split(ROUTED_COMMENTARY_SKILL_ANNOUNCE).join(ROUTED_COMMENTARY_SKILL_ANNOUNCE_REPLACEMENT);
   out = out.split(`- ${ROUTED_COMMENTARY_SKILL_WHY}`).join(ROUTED_COMMENTARY_SKILL_WHY_REPLACEMENT);
   out = out.split(ROUTED_COMMENTARY_SKILL_WHY).join(ROUTED_COMMENTARY_SKILL_WHY_REPLACEMENT);

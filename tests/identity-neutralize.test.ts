@@ -134,6 +134,19 @@ describe("identity neutralization — central helper", () => {
     expect(out.match(/Do not restate or paraphrase a pending action you already announced/g)?.length).toBe(1);
   });
 
+  test("routed identity also drops the as-you-work commentary mandate", () => {
+    const src = [
+      "You are Codex, an agent based on GPT-5.",
+      "As you work, you send messages to the `commentary` channel. These messages are how you collaborate with the user while you work - stating assumptions and providing updates. These messages should be concise and quickly scannable. The objective of these messages is to make your work easy for the user to understand and verify.",
+      ROUTED_COMMENTARY_TOOL_PREFIX,
+    ].join("\n\n");
+    const out = identifyRoutedModel(src, "meta/muse-spark-1.2-contributor");
+    expect(out).not.toContain("As you work, you send messages to the `commentary` channel");
+    expect(out).not.toContain("more than 60 seconds");
+    expect(out).toContain("Do not narrate each tool call");
+    expect(out).toContain(ROUTED_COMMENTARY_TOOL_REPLACEMENT);
+  });
+
   test("routed identity appends the anti-repeat rule when commentary exists without the 60s paragraph", () => {
     const src = "You are Codex, an agent based on GPT-5.\n\nYou share updates in the `commentary` channel.";
     const out = identifyRoutedModel(src, "grok-4.5");
