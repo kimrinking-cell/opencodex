@@ -17,6 +17,7 @@ import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
 import { extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
+import { CODEX_EXEC_JS_CONTRACT, isCodexExecToolName } from "../lib/codex-exec-js";
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -157,7 +158,9 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
    * format instead of following the declared grammar.
    */
   const customToolInputDescription = (tool: Record<string, unknown>): string => {
-    const base = "Raw tool input. Send the complete body verbatim in this string; do not wrap it in another JSON object.";
+    const base = isCodexExecToolName(typeof tool.name === "string" ? tool.name : undefined)
+      ? CODEX_EXEC_JS_CONTRACT
+      : "Raw tool input. Send the complete body verbatim in this string; do not wrap it in another JSON object.";
     if (!isObj(tool.format) || tool.format.type !== "grammar") return base;
     const definition = typeof tool.format.definition === "string" ? tool.format.definition.trim() : "";
     if (!definition) return base;

@@ -12,6 +12,7 @@ import {
   type TranslatorBudget,
   type TranslatorBufferKind,
 } from "./lib/translator-budget";
+import { repairCodexExecScript } from "./lib/codex-exec-js";
 
 function uuid(): string {
   return crypto.randomUUID().replace(/-/g, "");
@@ -206,6 +207,8 @@ export function bridgeToResponsesSSE(
     try { const o = JSON.parse(args); if (o && typeof o.input === "string") return o.input; } catch { /* raw */ }
     return args;
   };
+  const execFreeformInput = (name: string, args: string): string =>
+    repairCodexExecScript(name, freeformInput(args));
   // Best-effort unwrap of a PARTIAL freeform arg buffer for live input streaming
   // (`response.custom_tool_call_input.delta` — codex-rs uses it for UI preview only;
   // the completed custom_tool_call item stays authoritative). Compact `{"input":"...`
@@ -583,7 +586,7 @@ export function bridgeToResponsesSSE(
         if (currentToolCall.freeform) {
           emit("response.custom_tool_call_input.done", {
             item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
-            input: freeformInput(currentToolCall.args),
+            input: execFreeformInput(currentToolCall.name, currentToolCall.args),
           });
         }
         const item = currentToolCall.toolSearch
@@ -596,7 +599,7 @@ export function bridgeToResponsesSSE(
           ? {
               type: "custom_tool_call", id: currentToolCall.itemId,
               call_id: currentToolCall.callId, name: currentToolCall.name,
-              input: freeformInput(currentToolCall.args), status: "completed",
+              input: execFreeformInput(currentToolCall.name, currentToolCall.args), status: "completed",
             }
           : {
               type: "function_call", id: currentToolCall.itemId,
@@ -630,7 +633,7 @@ export function bridgeToResponsesSSE(
           ? {
               type: "custom_tool_call", id: currentToolCall.itemId,
               call_id: currentToolCall.callId, name: currentToolCall.name,
-              input: freeformInput(currentToolCall.args), status: "incomplete",
+              input: execFreeformInput(currentToolCall.name, currentToolCall.args), status: "incomplete",
             }
           : {
               type: "function_call", id: currentToolCall.itemId,
@@ -1470,6 +1473,8 @@ function buildResponseJSONWithBudget(
     try { const o = JSON.parse(args); if (o && typeof o.input === "string") return o.input; } catch { /* raw */ }
     return args;
   };
+  const execFreeformInput = (name: string, args: string): string =>
+    repairCodexExecScript(name, freeformInput(args));
   const parseArgsObj = (args: string): Record<string, unknown> => {
     try { const o = JSON.parse(args); return o && typeof o === "object" ? o : {}; } catch { return {}; }
   };
@@ -1556,7 +1561,7 @@ function buildResponseJSONWithBudget(
       pushOutput({
         type: "custom_tool_call", id: `ctc_${uuid()}`,
         call_id: currentToolCallId, name: realName,
-        input: freeformInput(currentToolCallArgs), status,
+        input: execFreeformInput(realName, currentToolCallArgs), status,
       });
     } else {
       pushOutput({

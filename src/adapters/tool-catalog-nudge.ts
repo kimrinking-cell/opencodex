@@ -5,6 +5,7 @@ import {
   type OcxTool,
   type OcxProviderConfig,
 } from "../types";
+import { CODEX_EXEC_JS_CONTRACT } from "../lib/codex-exec-js";
 
 const NEIGHBOR_AGENT_TOOL_NAMES = ["Read", "Grep", "Glob", "Bash", "LS", "apply_patch"] as const;
 
@@ -46,6 +47,7 @@ export function buildNonOpenAIToolCatalogNudgeFromNames(wireNames: readonly stri
       ? `Do not use neighboring-agent tool names ${quoteNames(unavailableNeighborNames)} unless this turn's catalog lists those exact names.`
       : undefined,
     "If you need shell, file search, file read, edit, or discovery behavior, choose the listed tool that provides that capability.",
+    advertised.has("exec") ? CODEX_EXEC_JS_CONTRACT : undefined,
     "Count a tool call only after its tool result returns; batch independent read-only calls when the runtime supports it.",
   ].filter((line): line is string => typeof line === "string").join(" ");
 }

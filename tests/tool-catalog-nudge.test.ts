@@ -24,6 +24,19 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(note).not.toContain("`Read`, `Grep`, `Glob`, `Bash`, `LS`, `apply_patch`");
   });
 
+  test("explains Codex exec JavaScript when the catalog lists exec", () => {
+    const note = buildNonOpenAIToolCatalogNudgeFromNames(["exec"]);
+
+    expect(note).toContain("Valid tool names for this turn are exactly `exec`");
+    expect(note).toContain("JavaScript program, not a shell line");
+    expect(note).toContain("Do not write `exec_command --cmd`");
+  });
+
+  test("does not attach the exec JS contract when only exec_command is listed", () => {
+    const note = buildNonOpenAIToolCatalogNudgeFromNames(["exec_command"]);
+    expect(note).not.toContain("JavaScript program, not a shell line");
+  });
+
   test("applies tool_choice before listing valid names", () => {
     const tools: OcxTool[] = [
       { name: "exec_command", description: "Run", parameters: {} },

@@ -51,6 +51,26 @@ describe("Responses parser", () => {
     });
   });
 
+  test("describes Codex exec as JavaScript rather than a shell CLI", () => {
+    const parsed = parseRequest({
+      model: "commandcode/meta-muse-spark-1.2-contributor",
+      input: "list files",
+      tools: [{ type: "custom", name: "exec", description: "Run JavaScript" }],
+    });
+
+    expect(parsed.context.tools?.[0]).toMatchObject({
+      name: "exec",
+      freeform: true,
+      parameters: {
+        properties: {
+          input: {
+            description: expect.stringContaining("JavaScript program, not a shell line"),
+          },
+        },
+      },
+    });
+  });
+
   test("preserves assistant message phase when replaying Responses output", () => {
     const parsed = parseRequest({
       model: "kiro/gpt-5.6-sol",
