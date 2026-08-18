@@ -2294,6 +2294,50 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.base_instructions).toContain(ROUTED_COMMENTARY_TOOL_REPLACEMENT);
   });
 
+  test("native GPT entries keep GPT-5 commentary cadence", () => {
+    const template = {
+      ...nativeTemplate(),
+      slug: "gpt-5.6-sol",
+      base_instructions: [
+        "You are Codex, an agent based on GPT-5.",
+        ROUTED_COMMENTARY_TOOL_PREFIX,
+      ].join("\n\n"),
+    };
+    const entries = buildCatalogEntries(template, ["gpt-5.6-sol"], []);
+    const native = entries.find(e => e.slug === "gpt-5.6-sol");
+    expect(native?.base_instructions).toContain("You are Codex");
+    expect(native?.base_instructions).not.toContain(ROUTED_COMMENTARY_TOOL_REPLACEMENT);
+    expect(native?.base_instructions).not.toContain("Do not restate or paraphrase a pending action");
+  });
+
+  test("non-muse routed clones also drop GPT-5 commentary spam", () => {
+    const template = {
+      ...nativeTemplate(),
+      base_instructions: [
+        "You are Codex, an agent based on GPT-5.",
+        ROUTED_COMMENTARY_TOOL_PREFIX,
+      ].join("\n\n"),
+    };
+    const entries = buildCatalogEntries(template, [], [
+      { provider: "cursor", id: "grok-4.6" },
+      { provider: "tokenrouter", id: "qwen-qwen3.8-max-free" },
+      { provider: "google-antigravity", id: "gemini-3.6-flash" },
+      { provider: "nvidia", id: "z-ai-glm-5.2" },
+    ]);
+    for (const slug of [
+      "cursor/grok-4.6",
+      "tokenrouter/qwen-qwen3.8-max-free",
+      "google-antigravity/gemini-3.6-flash",
+      "nvidia/z-ai-glm-5.2",
+    ]) {
+      const routed = entries.find(e => e.slug === slug);
+      expect(routed).toBeDefined();
+      expect(routed?.base_instructions).toContain(ROUTED_COMMENTARY_TOOL_REPLACEMENT);
+      expect(routed?.base_instructions).not.toContain("more than 60 seconds");
+      expect(routed?.base_instructions).not.toContain("You are Codex");
+    }
+  });
+
   test("buildCatalogEntries strips routed entries cloned from native templates", () => {
     const entries = buildCatalogEntries(nativeTemplate(), ["gpt-5.5"], [
       { provider: "anthropic", id: "claude-sonnet-4-6", owned_by: "anthropic" },

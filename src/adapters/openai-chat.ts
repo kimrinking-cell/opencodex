@@ -291,10 +291,17 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
     ...(toolCatalogNudge ? [toolCatalogNudge] : []),
   ];
   if (systemParts.length > 0) {
-    const wireModelId = provider.modelSuffixBracketStrip
-      ? stripBracketedModelSuffix(parsed.modelId)
-      : parsed.modelId;
-    const sys = identifyRoutedModel(systemParts.join("\n\n"), wireModelId);
+    const joined = systemParts.join("\n\n");
+    // Native api.openai.com must keep Codex GPT identity and the 60s commentary
+    // cadence. identifyRoutedModel is only for cloned/routed non-reference models.
+    const sys = nativeOpenAI
+      ? joined
+      : identifyRoutedModel(
+        joined,
+        provider.modelSuffixBracketStrip
+          ? stripBracketedModelSuffix(parsed.modelId)
+          : parsed.modelId,
+      );
     out.push({ role: "system", content: sys });
   }
 

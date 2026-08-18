@@ -5,6 +5,7 @@ import {
   CURSOR_TOOL_BYTES_LIMIT,
   CURSOR_TOOL_COUNT_LIMIT,
 } from "../src/adapters/cursor/request-builder";
+import { ROUTED_COMMENTARY_TOOL_PREFIX, ROUTED_COMMENTARY_TOOL_REPLACEMENT } from "../src/adapters/identity";
 import { cursorMcpToolsEncodedSize } from "../src/adapters/cursor/tool-definitions";
 import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest } from "../src/types";
@@ -535,5 +536,35 @@ describe("Cursor request builder", () => {
 
     expect(request.conversationId).not.toBe("cursor_force_me");
     expect(request.conversationId.startsWith("cursor_")).toBe(true);
+  });
+
+  test("rewrites GPT-5 identity and 60s commentary for routed Cursor models", () => {
+    const request = createCursorRequest({
+      ...base,
+      modelId: "cursor/grok-4.6",
+      context: {
+        systemPrompt: [
+          "You are Codex, an agent based on GPT-5.",
+          ROUTED_COMMENTARY_TOOL_PREFIX,
+        ],
+        messages: [
+          {
+            role: "developer",
+            content: `You are Codex, an agent based on GPT-5.\n${ROUTED_COMMENTARY_TOOL_PREFIX}`,
+            timestamp: 1,
+          },
+          { role: "user", content: "hi", timestamp: 2 },
+        ],
+      },
+    });
+
+    expect(request.system.join("\n")).toContain("powered by the cursor/grok-4.6");
+    expect(request.system.join("\n")).toContain(ROUTED_COMMENTARY_TOOL_REPLACEMENT);
+    expect(request.system.join("\n")).not.toContain("more than 60 seconds");
+    expect(request.system.join("\n")).not.toContain("You are Codex");
+    const developer = request.messages.find(message => message.role === "developer");
+    expect(developer?.content).toContain("powered by the cursor/grok-4.6");
+    expect(developer?.content).not.toContain("more than 60 seconds");
+    expect(request.messages.find(message => message.role === "user")?.content).toBe("hi");
   });
 });

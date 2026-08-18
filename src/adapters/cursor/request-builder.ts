@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { identifyRoutedModel } from "../identity";
 import type {
   OcxAssistantContentPart,
   OcxContentPart,
@@ -190,11 +191,15 @@ function contentToText(content: string | readonly (OcxContentPart | OcxAssistant
     .join("\n");
 }
 
-function requestMessage(message: OcxMessage): CursorRequestMessage | undefined {
+function requestMessage(message: OcxMessage, modelId: string): CursorRequestMessage | undefined {
   switch (message.role) {
     case "user":
-    case "developer":
       return { role: message.role, content: contentToText(message.content) };
+    case "developer":
+      return {
+        role: message.role,
+        content: identifyRoutedModel(contentToText(message.content), modelId),
+      };
     case "assistant":
       return { role: "assistant", content: contentToText(message.content) };
     case "toolResult":
@@ -256,19 +261,22 @@ export function createCursorRequest(
   options: CreateCursorRequestOptions = {},
 ): CursorRunRequest {
   const messages = parsed.context.messages
-    .map(requestMessage)
+    .map(message => requestMessage(message, parsed.modelId))
     .filter((message): message is CursorRequestMessage => !!message && message.content.length > 0);
   const activeText = [...messages].reverse().find(message => message.role === "user" || message.role === "developer")?.content ?? "";
   const visibleTools = cursorToolsForActivePrompt(parsed.context.tools, activeText, parsed.options.toolChoice);
   const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);
   const limitNote = catalogLimitNote(budget.tools, budget.omitted);
   const model = normalizeCursorModelId(parsed.modelId, parsed.options.reasoning);
+  const routedSystem = (parsed.context.systemPrompt ?? [])
+    .map(text => identifyRoutedModel(text, parsed.modelId))
+    .filter(text => text.trim().length > 0);
   return {
     modelId: model.modelId,
     ...(model.requestedModelParameters ? { requestedModelParameters: model.requestedModelParameters } : {}),
     ...(model.routingLevel ? { routingLevel: model.routingLevel } : {}),
     conversationId: resolveCursorConversationId(parsed, model.modelId, options),
-    system: [...(parsed.context.systemPrompt ?? []), ...(limitNote ? [limitNote] : [])],
+    system: [...routedSystem, ...(limitNote ? [limitNote] : [])],
     messages,
     rawMessages: parsed.context.messages,
     ...(parsed._compactionRequest === true || parsed._contextCompactionBoundary === true ? { contextUsageReset: true } : {}),

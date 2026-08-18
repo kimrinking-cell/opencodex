@@ -195,6 +195,47 @@ describe("identity neutralization — adapters never leak proxy identity", () =>
     expect(sys.content).toContain("identify as ~x-ai/grok-latest");
   });
 
+  test("openai-chat: native OpenAI keeps GPT-5 identity and commentary cadence", async () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "key",
+    } as unknown as OcxProviderConfig;
+    const { body } = await createOpenAIChatAdapter(provider).buildRequest(parsed("gpt-5.6-sol", "openai-chat", {
+      context: {
+        systemPrompt: [SYS, ROUTED_COMMENTARY_TOOL_PREFIX],
+        messages: [{ role: "user", content: "hi" }],
+      },
+    }));
+    const messages = JSON.parse(body).messages as { role: string; content: string }[];
+    const sys = messages.find(m => m.role === "system")!;
+    expect(sys.content).toContain(SYS);
+    expect(sys.content).toContain("more than 60 seconds");
+    expect(sys.content).toContain("start with a message in the `commentary` channel");
+    expect(sys.content).not.toContain("powered by the gpt-5.6-sol");
+    expect(sys.content).not.toContain(ROUTED_COMMENTARY_TOOL_REPLACEMENT);
+  });
+
+  test("openai-chat: routed non-OpenAI host still softens commentary", async () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      apiKey: "key",
+    } as unknown as OcxProviderConfig;
+    const { body } = await createOpenAIChatAdapter(provider).buildRequest(parsed("nvidia/z-ai-glm-5.2", "openai-chat", {
+      context: {
+        systemPrompt: [SYS, ROUTED_COMMENTARY_TOOL_PREFIX],
+        messages: [{ role: "user", content: "hi" }],
+      },
+    }));
+    const messages = JSON.parse(body).messages as { role: string; content: string }[];
+    const sys = messages.find(m => m.role === "system")!;
+    expect(sys.content).toContain("powered by the nvidia/z-ai-glm-5.2");
+    expect(sys.content).toContain(ROUTED_COMMENTARY_TOOL_REPLACEMENT);
+    expect(sys.content).not.toContain("more than 60 seconds");
+    expect(sys.content).not.toContain(SYS);
+  });
+
   test("google/antigravity: systemInstruction is neutralized, no proxy mention", async () => {
     const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" };
     const { body } = await createGoogleAdapter(provider).buildRequest(parsed("gemini-3-pro", "google"));
