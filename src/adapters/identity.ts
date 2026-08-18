@@ -61,16 +61,62 @@ function safeRoutedModelIdentity(modelName: string): string | null {
 }
 
 /**
+ * Codex clones GPT-5 `base_instructions` onto every routed catalog row. Native GPT-5 was
+ * trained to emit a commentary channel before tools and again if 60s elapses. Routed models
+ * (Muse, Claude, Grok, …) treat that as "restate the same pending action every tool round",
+ * which the Desktop UI surfaces as an endless identical status loop. Rewrite the harness
+ * sentences; keep the commentary/final channel names so Codex can still classify output.
+ */
+export const ROUTED_COMMENTARY_TOOL_PREFIX =
+  "If the user's request requires calling tools, start with a message in the `commentary` channel. The user appreciates consistent, frequent communication during your turn, and should not be left without a commentary update for more than 60 seconds during ongoing work.";
+
+export const ROUTED_COMMENTARY_TOOL_REPLACEMENT =
+  "If the user's request requires calling tools, call the tool. Send commentary only when the user-visible state changed, a tool failed, or you are blocked. Do not restate or paraphrase a pending action you already announced, and do not send commentary before every tool call.";
+
+const ROUTED_COMMENTARY_AS_YOU_WORK =
+  "As you work, you send messages to the `commentary` channel. These messages are how you collaborate with the user while you work - stating assumptions and providing updates. These messages should be concise and quickly scannable. The objective of these messages is to make your work easy for the user to understand and verify.";
+
+const ROUTED_COMMENTARY_AS_YOU_WORK_REPLACEMENT =
+  "Keep the `commentary` and `final` channels. Do not narrate each tool call. Send commentary only for a real status change, a failure, or a blocker.";
+
+const ROUTED_COMMENTARY_SKILL_WHY =
+  "First, tell the user in the commentary channel **why** you are using the skill.";
+
+const ROUTED_COMMENTARY_SKILL_WHY_REPLACEMENT =
+  "Use the skill without a commentary preface unless the skill pauses the turn or changes the plan.";
+
+const ROUTED_COMMENTARY_SKILL_ANNOUNCE =
+  "Explicitly tell the user in the `commentary` channel whenever a skill causes you to take an action or pause your work.";
+
+const ROUTED_COMMENTARY_SKILL_ANNOUNCE_REPLACEMENT =
+  "Mention a skill in commentary only when it pauses the turn or materially changes the plan.";
+
+const ROUTED_COMMENTARY_ANTIREPEAT =
+  "Do not restate or paraphrase a pending action you already announced";
+
+export function softenRoutedCommentaryInstructions(systemText: string): string {
+  let out = systemText.split(ROUTED_COMMENTARY_TOOL_PREFIX).join(ROUTED_COMMENTARY_TOOL_REPLACEMENT);
+  out = out.split(ROUTED_COMMENTARY_AS_YOU_WORK).join(ROUTED_COMMENTARY_AS_YOU_WORK_REPLACEMENT);
+  out = out.split(ROUTED_COMMENTARY_SKILL_ANNOUNCE).join(ROUTED_COMMENTARY_SKILL_ANNOUNCE_REPLACEMENT);
+  out = out.split(`- ${ROUTED_COMMENTARY_SKILL_WHY}`).join(ROUTED_COMMENTARY_SKILL_WHY_REPLACEMENT);
+  out = out.split(ROUTED_COMMENTARY_SKILL_WHY).join(ROUTED_COMMENTARY_SKILL_WHY_REPLACEMENT);
+  if (out.includes("commentary") && !out.includes(ROUTED_COMMENTARY_ANTIREPEAT)) {
+    out = `${out.trimEnd()}\n\n${ROUTED_COMMENTARY_TOOL_REPLACEMENT}`;
+  }
+  return out;
+}
+
+/**
  * Identity for a routed model. Callers pass the concrete model id that will be sent upstream, so
  * identity questions can name it instead of falling back to Codex/GPT identity inherited from the
- * native template.
+ * native template. Also strips GPT-5 commentary-spam sentences inherited from the native template.
  */
 export function identifyRoutedModel(systemText: string, modelName: string): string {
   const identity = safeRoutedModelIdentity(modelName);
   const replacement = identity
     ? `You are a coding agent powered by the ${identity}. If asked which model you are, identify as ${identity}. Do not claim to be a different model or to have a different creator.`
     : "You are a coding agent powered by the configured model. If asked which model you are, identify as configured model. Do not claim to be GPT-5 or made by OpenAI.";
-  return systemText.replace(CODEX_GPT5_IDENTITY_RE, () => replacement);
+  return softenRoutedCommentaryInstructions(systemText.replace(CODEX_GPT5_IDENTITY_RE, () => replacement));
 }
 
 /** The catalog (static, on-disk) replacement for `base_instructions`. Same neutral wording. */
