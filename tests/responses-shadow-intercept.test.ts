@@ -91,6 +91,24 @@ function interceptConfig(): OcxConfig {
   } as OcxConfig;
 }
 
+test("shadow intercept uses configured valid effort and falls back to low", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] }), { status: 200 });
+  }) as typeof fetch;
+  const config = interceptConfig();
+  config.shadowCallIntercept = { enabled: true, model: "xai/grok-4.5", effort: "high" };
+  await post(config, "gpt-5.6-luna");
+  expect((bodies[0]?.reasoning as { effort?: string } | undefined)?.effort
+    ?? bodies[0]?.reasoning_effort).toBe("high");
+  bodies.length = 0;
+  config.shadowCallIntercept.effort = "broken" as any;
+  await post(config, "gpt-5.6-luna");
+  expect((bodies[0]?.reasoning as { effort?: string } | undefined)?.effort
+    ?? bodies[0]?.reasoning_effort).toBe("low");
+});
+
 async function post(
   config: OcxConfig,
   model: string,

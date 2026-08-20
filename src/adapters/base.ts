@@ -82,6 +82,7 @@ export interface AdapterRequest {
     reasoningLog?:
       | {
           effectiveEffort: string;
+          reasoningWireOmitted?: boolean;
           wireField: "reasoning.enabled";
           wireValue: boolean;
         }
@@ -92,6 +93,7 @@ export interface AdapterRequest {
         }
       | {
           effectiveEffort: string;
+          reasoningWireOmitted?: boolean;
           wireField: "reasoning_effort" | "reasoning.effort" | "thinking.type";
           wireValue: string;
         };
