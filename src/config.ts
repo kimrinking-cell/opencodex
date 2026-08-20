@@ -1615,6 +1615,28 @@ function sanitizeRetryOn429ForLoad(parsed: unknown): void {
 }
 
 /**
+ * Preserve the pre-2.28 provider pacing knob while allowing the new policy to win.
+ * This is load-time only: management writes continue to use the canonical requestPacing
+ * shape, and an explicitly present requestPacing (even malformed) is never overwritten.
+ */
+export function migrateLegacyRequestPacingForLoad(parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const providers = (parsed as Record<string, unknown>).providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
+  for (const provider of Object.values(providers as Record<string, unknown>)) {
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+    const p = provider as Record<string, unknown>;
+    if (Object.hasOwn(p, "requestPacing") || !Object.hasOwn(p, "maxRequestsPerMinute")) continue;
+    const rpm = p.maxRequestsPerMinute;
+    if (typeof rpm === "number" && Number.isFinite(rpm) && rpm >= 1 / 60 && rpm <= 60_000) {
+      p.requestPacing = { enabled: true, requestsPerMinute: rpm };
+    } else {
+      console.warn("⚠️  config.json legacy maxRequestsPerMinute is invalid — ignoring legacy pacing");
+    }
+  }
+}
+
+/**
  * Management write-boundary validation for `retryOn429` (fail closed). Unlike the
  * lenient load-time sanitizer, invalid values and unknown keys are rejected outright so
  * a POST/PATCH cannot persist a policy the proxy would then silently degrade. Reuses the
@@ -2080,6 +2102,7 @@ export function loadConfig(): OcxConfig {
     const parsed = JSON.parse(raw);
     sanitizeAliasesForLoad(parsed);
     sanitizeModelDisplayNamesForLoad(parsed);
+    migrateLegacyRequestPacingForLoad(parsed);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);

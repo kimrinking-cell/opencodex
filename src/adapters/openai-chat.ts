@@ -1,7 +1,7 @@
 import type { AdapterRequest, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall, OcxUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
-import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { isTokenRouterQwenMaxFree, mapReasoningEffort, modelRecordValue, tokenRouterQwenEffectiveEffort } from "../reasoning-effort";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { isDebugEnabled } from "../lib/debug-settings";
@@ -1501,6 +1501,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const reasoningEffort = omitReasoningEffortWithTools
         ? undefined
         : mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
+      const tokenRouterQwenEffective = isTokenRouterQwenMaxFree(provider, parsed.modelId) && parsed.options.reasoning
+        ? tokenRouterQwenEffectiveEffort(parsed.options.reasoning)
+        : undefined;
       const nativeOpenAI = isNativeOpenAIChatTarget(provider);
       let reasoningLog: AdapterRequest["reasoningLog"];
       if (!reasoningDisabled && !omitReasoningEffortWithTools && provider.reasoningWireFormat === "gateway-object" && parsed.options.reasoning === "none") {
@@ -1519,6 +1522,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             wireValue: false,
           };
         }
+      } else if (tokenRouterQwenEffective === "xhigh") {
+        reasoningLog = { effectiveEffort: "xhigh", reasoningWireOmitted: true, wireField: "reasoning_effort", wireValue: "xhigh" };
       } else if (reasoningEffort !== undefined) {
         if (provider.reasoningWireFormat === "gateway-object") {
           if (nativeOpenAI) {

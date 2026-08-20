@@ -342,6 +342,10 @@ export function deriveEntry(
       // native tool/search/responses-lite contract while preserving the routed slug and wire id.
       if (!codexForwardNativeCapabilityAlias) {
         normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true, model?.codexToolMode);
+        // Third-party routed models must not receive Codex host plugin/app usage prose.
+        // Canonical OpenAI/Codex forward aliases intentionally retain native flags above.
+        e.include_plugin_usage_instructions = false;
+        e.include_apps_usage_instructions = false;
       } else if (model?.codexToolMode !== undefined) {
         applyRoutedCodexToolMode(e, model.codexToolMode);
       }
@@ -387,6 +391,8 @@ export function deriveEntry(
   if (isRouted) {
     applyRoutedCodexToolMode(entry, model?.codexToolMode);
     applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+    entry.include_plugin_usage_instructions = false;
+    entry.include_apps_usage_instructions = false;
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);

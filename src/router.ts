@@ -123,8 +123,16 @@ export function knownModelIdsForProvider(
     for (const id of Object.keys(map ?? {})) ids.add(id);
   }
   for (const cached of getStaleCached(provName) ?? []) ids.add(cached.id);
+  // A custom-model row may persist the Codex-facing encoded spelling of a native
+  // namespaced id (for example `qwen-qwen3.8-max-free` for the native
+  // `qwen/qwen3.8-max-free`).  It is the same model, not a second candidate.
+  // Keep a literal custom id only when it is not an encoding of a known native
+  // slash id; genuine native collisions (e.g. `a/b` and `a-b`) remain in `ids`
+  // and are still rejected fail-closed by decodeRoutedModelIdOrThrow.
   for (const model of config?.customModels ?? []) {
-    if (model.provider === provName && model.modelId) ids.add(model.modelId);
+    if (model.provider !== provName || !model.modelId) continue;
+    const isEncodedAlias = [...ids].some(id => id.includes("/") && encodeRoutedModelId(id) === model.modelId);
+    if (!isEncodedAlias) ids.add(model.modelId);
   }
   return [...ids];
 }

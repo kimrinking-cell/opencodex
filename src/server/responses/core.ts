@@ -258,6 +258,7 @@ import {
 import type { AdmissionLease } from "../../lib/admission";
 import { supportedLadderFor } from "../effort-policy";
 import { isThreadSpawnRequest } from "../effort-policy";
+import { isCodexReasoningEffort } from "../../reasoning-effort";
 import {
   applySubagentModelFallback,
   maybePrimeSubagentQuota,
@@ -2145,6 +2146,10 @@ async function applyFinalRouteRequestNormalization(args: {
       subagentModels: config.subagentModels,
       subagentModelFallback: config.subagentModelFallback,
       injectionPrompt: config.injectionPrompt,
+      // Keep first-party OpenAI/Codex guidance byte-for-byte compatible; arbitrary
+      // gateways (Qwen/DeepSeek and similar) get only routed-safe additions.
+      externalRouted: !isCanonicalOpenAiForwardProvider(route.provider)
+        && route.providerName !== "openai-apikey",
     });
     if (guidance) {
       injectDeveloperMessage(parsed, guidance);

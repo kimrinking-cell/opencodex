@@ -92,6 +92,7 @@ export interface PersistedUsageAttempt {
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  reasoningWireOmitted?: boolean;
   /** Adapter-produced tier fact for this physical attempt; absent on pre-B0 rows. */
   tierOutcome?: AttemptTierOutcome;
 }
@@ -123,6 +124,7 @@ export interface PersistedUsageEntry {
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  reasoningWireOmitted?: boolean;
   /** Raw caller tier captured before routing, sanitized and bounded for durable logs. */
   callerServiceTier?: string;
   requestedServiceTier?: string;
@@ -438,6 +440,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
         ? { reasoningWireValue: capMetadataString(attempt.reasoningWireValue) }
         : { reasoningWireValue: attempt.reasoningWireValue }
       : {}),
+    ...(attempt.reasoningWireOmitted === true ? { reasoningWireOmitted: true } : {}),
     ...(tierOutcome ? { tierOutcome } : {}),
   };
 }
@@ -520,6 +523,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
         ? { reasoningWireValue: capMetadataString(entry.reasoningWireValue) }
         : { reasoningWireValue: entry.reasoningWireValue }
       : {}),
+    ...(entry.reasoningWireOmitted === true ? { reasoningWireOmitted: true } : {}),
     ...(callerServiceTier ? { callerServiceTier } : {}),
     ...(typeof entry.requestedServiceTier === "string" && entry.requestedServiceTier
       ? { requestedServiceTier: capMetadataString(entry.requestedServiceTier) }
