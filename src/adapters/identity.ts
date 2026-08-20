@@ -70,8 +70,28 @@ export function identifyRoutedModel(systemText: string, modelName: string): stri
   const replacement = identity
     ? `You are a coding agent powered by the ${identity}. If asked which model you are, identify as ${identity}. Do not claim to be a different model or to have a different creator.`
     : "You are a coding agent powered by the configured model. If asked which model you are, identify as configured model. Do not claim to be GPT-5 or made by OpenAI.";
-  return systemText.replace(CODEX_GPT5_IDENTITY_RE, () => replacement);
+  const identified = systemText.replace(CODEX_GPT5_IDENTITY_RE, () => replacement);
+  return sanitizeRoutedInstructions(identified, modelName);
 }
 
 /** The catalog (static, on-disk) replacement for `base_instructions`. Same neutral wording. */
 export const NEUTRAL_IDENTITY_CATALOG = NEUTRAL_IDENTITY_LINE;
+
+/**
+ * Remove Codex-host-specific operational instructions from third-party routed prompts.
+ * Keep this deliberately narrow and model-gated: first-party OpenAI/GPT requests must retain
+ * their native prompt byte-for-byte. Catalog/plugin layers are allowed to remain available to
+ * the native route, but are not useful context for Qwen/DeepSeek and can cause tool-policy drift.
+ */
+export function sanitizeRoutedInstructions(systemText: string, modelName: string): string {
+  const model = modelName.trim().toLowerCase();
+  if (!model || /(?:^|[/:_-])(?:gpt|openai)(?:[/:_-]|$)/.test(model)) return systemText;
+  return systemText
+    // Split only on line boundaries: preserving empty lines is part of the routed
+    // prompt contract (and avoids changing native-compatible local gateways).
+    .split("\n")
+    .filter(line => !/(?:provide|send|share).*updates?.*(?:every|within).*\b(?:30|60)\s*seconds?\b/i.test(line))
+    .filter(line => !/commentary.*(?:every|each).*tool|(?:each|every).*tool.*commentary/i.test(line))
+    .filter(line => !/^\s*#{1,6}\s*(?:plugins?|apps?)\s*$/i.test(line))
+    .join("\n");
+}
