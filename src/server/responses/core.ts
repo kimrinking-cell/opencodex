@@ -199,6 +199,7 @@ import { readBoundedResponseBody } from "../../lib/bounded-body";
 import type { AdmissionLease } from "../../lib/admission";
 import { supportedLadderFor } from "../effort-policy";
 import { isThreadSpawnRequest } from "../effort-policy";
+import { isCodexReasoningEffort } from "../../reasoning-effort";
 import {
   applySubagentModelFallback,
   maybePrimeSubagentQuota,
@@ -1673,6 +1674,10 @@ async function applyFinalRouteRequestNormalization(args: {
       subagentModels: config.subagentModels,
       subagentModelFallback: config.subagentModelFallback,
       injectionPrompt: config.injectionPrompt,
+      // Keep first-party OpenAI/Codex guidance byte-for-byte compatible; arbitrary
+      // gateways (Qwen/DeepSeek and similar) get only routed-safe additions.
+      externalRouted: !isCanonicalOpenAiForwardProvider(route.provider)
+        && route.providerName !== "openai-apikey",
     });
     if (guidance) {
       injectDeveloperMessage(parsed, guidance);
@@ -2312,10 +2317,13 @@ async function handleResponsesInner(
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
       (parsed._rawBody as { model?: string }).model = _sci.model;
     }
-    // Force effort to low for shadow/helper calls (matching upstream behavior)
-    parsed.options.reasoning = "low";
+    // Use the configured effort when valid; malformed/stale config remains fail-safe at low.
+    const shadowEffort = typeof _sci.effort === "string" && isCodexReasoningEffort(_sci.effort)
+      ? _sci.effort
+      : "low";
+    parsed.options.reasoning = shadowEffort;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
-      (parsed._rawBody as Record<string, unknown>).reasoning = { effort: "low" };
+      (parsed._rawBody as Record<string, unknown>).reasoning = { effort: shadowEffort };
     }
     // Record the operator-configured prefix that matched, NOT the caller's raw model string.
     // Matching is by prefix, so a caller can append arbitrary text and still intercept; that
