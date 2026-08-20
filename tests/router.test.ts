@@ -1,9 +1,63 @@
 import { describe, expect, test } from "bun:test";
 import { mapReasoningEffort } from "../src/reasoning-effort";
-import { NoEnabledOpenAiProviderError, routeModel } from "../src/router";
+import { NoEnabledOpenAiProviderError, knownModelIdsForProvider, routeModel } from "../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 describe("routeModel registry effort defaults", () => {
+  test("dedupes a custom encoded spelling of the same native namespaced model", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "qwen",
+      providers: {
+        qwen: {
+          adapter: "openai-responses",
+          baseUrl: "https://proxy.example/v1",
+          models: ["qwen/qwen3.8-max-free"],
+        },
+      },
+      customModels: [{ id: "qwen-alias", provider: "qwen", modelId: "qwen-qwen3.8-max-free" }],
+    };
+    expect(knownModelIdsForProvider("qwen", config.providers.qwen!, config)).toEqual(["qwen/qwen3.8-max-free"]);
+    expect(routeModel(config, "qwen/qwen-qwen3.8-max-free")).toMatchObject({
+      providerName: "qwen",
+      modelId: "qwen/qwen3.8-max-free",
+    });
+  });
+
+  test("keeps genuine native slash/flat collisions fail-closed", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "qwen",
+      providers: {
+        qwen: {
+          adapter: "openai-responses",
+          baseUrl: "https://proxy.example/v1",
+          models: ["a/b", "a-b"],
+        },
+      },
+    };
+    expect(() => routeModel(config, "qwen/a-b")).toThrow('ambiguous model id "a-b"');
+  });
+
+  test("keeps a distinct explicit-provider custom model routable", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "qwen",
+      providers: {
+        qwen: {
+          adapter: "openai-responses",
+          baseUrl: "https://proxy.example/v1",
+          models: ["qwen/qwen3.8-max-free"],
+        },
+      },
+      customModels: [{ id: "custom-other", provider: "qwen", modelId: "qwen3.8-max-free" }],
+    };
+    expect(routeModel(config, "qwen/qwen3.8-max-free")).toMatchObject({
+      providerName: "qwen",
+      modelId: "qwen/qwen3.8-max-free",
+    });
+  });
+
   test("allows only opted-in OAuth presets to use explicit API-key billing", () => {
     const xaiKey: OcxConfig = {
       port: 10100,
