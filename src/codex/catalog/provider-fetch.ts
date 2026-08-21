@@ -30,7 +30,7 @@ import {
 } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
-import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
+import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, isTokenRouterQwenMaxFree, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
@@ -747,7 +747,8 @@ export function applyProviderConfigHints(
     inputModalities = base.includes("image") ? [...base] : [...base, "image"];
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
-  const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
+  const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id)
+    ?? (isTokenRouterQwenMaxFree(prov, model.id) ? "xhigh" : model.defaultReasoningEffort);
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
   const supportsVerbosity = configuredVerbositySupport(name, prov, model.id);
   const fastPolicy = fastPolicyForModel(prov, model.id, name);
@@ -770,6 +771,7 @@ export function applyProviderConfigHints(
     ...(hintedWindow !== undefined ? { contextWindow: hintedWindow } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+    ...(isTokenRouterQwenMaxFree(prov, model.id) ? { preserveReasoningEfforts: true } : {}),
     ...(configuredMaxInput !== undefined
       ? {
         maxInputTokens: typeof model.maxInputTokens === "number" && model.maxInputTokens > 0
@@ -2262,6 +2264,9 @@ async function gatherRoutedModelsUncached(
         ? { inputModalities: cm.inputModalities }
         : codexForwardNativeCapabilityAlias ? { inputModalities: nativeInputModalities(cm.modelId) } : {}),
       ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
+      ...(effectiveProvider && isTokenRouterQwenMaxFree(effectiveProvider, cm.modelId)
+        ? { preserveReasoningEfforts: true, defaultReasoningEffort: "xhigh" }
+        : {}),
       // Native-alias defaults apply only where the custom row declares nothing: the explicit
       // spreads below must win (later in object order), so a stored `[]` stays empty and a
       // declared ladder is never replaced by the alias's native ladder.
@@ -2323,6 +2328,8 @@ async function gatherRoutedModelsUncached(
         : {}),
       ...(base.inputModalities === undefined && replaced.inputModalities !== undefined ? { inputModalities: replaced.inputModalities } : {}),
       ...(base.reasoningEfforts === undefined && replaced.reasoningEfforts !== undefined ? { reasoningEfforts: replaced.reasoningEfforts } : {}),
+      ...(base.preserveReasoningEfforts === undefined && replaced.preserveReasoningEfforts !== undefined
+        ? { preserveReasoningEfforts: replaced.preserveReasoningEfforts } : {}),
       ...(base.defaultReasoningEffort === undefined && replaced.defaultReasoningEffort !== undefined
         && Array.isArray(effectiveLadder) && effectiveLadder.includes(replaced.defaultReasoningEffort)
         ? { defaultReasoningEffort: replaced.defaultReasoningEffort } : {}),
