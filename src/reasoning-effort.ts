@@ -157,16 +157,45 @@ export function reasoningEffortMapFor(provider: OcxProviderConfig, modelId: stri
   return modelRecordValue(provider.modelReasoningEffortMap, modelId) ?? provider.reasoningEffortMap;
 }
 
-/** TokenRouter's free native Qwen route accepts only low/medium on the wire. */
+/** TokenRouter's free native Qwen route accepts low/medium; higher Codex tiers omit the wire field. */
+const TOKEN_ROUTER_QWEN_MAX_FREE_MODEL_IDS = new Set([
+  "qwen/qwen3.8-max-free",
+  "qwen-qwen3.8-max-free",
+]);
+
 export function isTokenRouterQwenMaxFree(provider: OcxProviderConfig, modelId: string): boolean {
   const baseUrl = provider.baseUrl?.replace(/\/+$/, "");
-  return baseUrl === "https://api.tokenrouter.com/v1" && modelId === "qwen/qwen3.8-max-free";
+  return baseUrl === "https://api.tokenrouter.com/v1" && TOKEN_ROUTER_QWEN_MAX_FREE_MODEL_IDS.has(modelId.toLowerCase());
 }
 
 export function tokenRouterQwenEffectiveEffort(requested: string): "low" | "medium" | "xhigh" | undefined {
   if (requested === "low" || requested === "medium") return requested;
   if (requested === "xhigh" || requested === "high" || requested === "max" || requested === "ultra") return "xhigh";
   return undefined;
+}
+
+export interface ReasoningEffortDecision {
+  effectiveEffort: "low" | "medium" | "xhigh";
+  wireValue: "low" | "medium" | "xhigh";
+  reasoningWireOmitted?: boolean;
+}
+
+/** Resolve the exact provider/model boundary once for both Chat serializers. */
+export function resolveReasoningEffortDecision(
+  provider: OcxProviderConfig,
+  modelId: string,
+  requested: string | undefined,
+): ReasoningEffortDecision | undefined {
+  if (!requested || modelInList(provider.noReasoningModels, modelId) || !isTokenRouterQwenMaxFree(provider, modelId)) {
+    return undefined;
+  }
+  const effectiveEffort = tokenRouterQwenEffectiveEffort(requested);
+  if (!effectiveEffort) return undefined;
+  return {
+    effectiveEffort,
+    wireValue: effectiveEffort,
+    ...(effectiveEffort === "xhigh" ? { reasoningWireOmitted: true } : {}),
+  };
 }
 
 /**
@@ -176,9 +205,9 @@ export function tokenRouterQwenEffectiveEffort(requested: string): "low" | "medi
 export function mapReasoningEffort(provider: OcxProviderConfig, modelId: string, requested: string | undefined): string | undefined {
   if (!requested) return undefined;
   if (modelInList(provider.noReasoningModels, modelId)) return undefined;
-  if (isTokenRouterQwenMaxFree(provider, modelId)) {
-    const effective = tokenRouterQwenEffectiveEffort(requested);
-    return effective === "low" || effective === "medium" ? effective : undefined;
+  const decision = resolveReasoningEffortDecision(provider, modelId, requested);
+  if (decision) {
+    return decision.reasoningWireOmitted ? undefined : decision.wireValue;
   }
 
   // Upstream codex-rs converts ultra -> max before ANY provider request (core/src/client.rs
