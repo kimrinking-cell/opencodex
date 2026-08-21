@@ -1185,7 +1185,7 @@ test("chat-native applies the exact TokenRouter Qwen3.8 Max Free reasoning bound
       await response.json();
     }
     expect(captured.map(body => body.reasoning_effort)).toEqual(["low", "medium", undefined, undefined, undefined, undefined]);
-    const logs = getRequestLogEntries().filter(entry => entry.path === "/v1/chat/completions");
+    const logs = getRequestLogEntries().filter(entry => entry.inboundProtocol === "chat" && entry.requestedEffort !== undefined);
     expect(logs.slice(-6).map(entry => [entry.requestedEffort, entry.effectiveEffort, entry.reasoningWireValue, entry.reasoningWireOmitted])).toEqual([
       ["low", "low", "low", undefined],
       ["medium", "medium", "medium", undefined],
