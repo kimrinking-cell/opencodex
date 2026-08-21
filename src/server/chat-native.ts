@@ -36,6 +36,7 @@ import {
   addFinalRequestLog,
   beginRequestAttempt,
   noteAttemptSend,
+  recordAdapterReasoning,
   recordFirstOutput,
   sealRequestAttemptIdentity,
   type RequestLogContext,
@@ -155,14 +156,18 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     translatorBudget.chargeRetained(bytes, { kind: "request_copies" });
     retainedRequestBytes = bytes;
   };
-  const buildActiveRequest = () => buildOpenAIChatPassthroughRequest(
-    activeProvider,
-    options.chatBody,
-    route.modelId,
-    requestedStream,
-    fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
-    config.fastMode,
-  );
+  const buildActiveRequest = () => {
+    const request = buildOpenAIChatPassthroughRequest(
+      activeProvider,
+      options.chatBody,
+      route.modelId,
+      requestedStream,
+      fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
+      config.fastMode,
+    );
+    recordAdapterReasoning(logCtx, request);
+    return request;
+  };
   try {
     activeRequest = buildActiveRequest();
     retainRequest(activeRequest);
