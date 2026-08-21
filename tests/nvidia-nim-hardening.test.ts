@@ -39,6 +39,27 @@ function parsedFor(modelId: string, options: Partial<OcxParsedRequest["options"]
 }
 
 describe("nvidia NIM registry hardening (issue #126)", () => {
+  test("self-hosted NIM Qwen3.8 remains a separate custom provider and keeps explicit xhigh", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "nim-qwen38",
+      providers: {
+        "nim-qwen38": {
+          adapter: "openai-chat",
+          baseUrl: "https://nim.example.test/v1",
+          models: ["Qwen/Qwen3.8-2.4T-A95B-FP8"],
+          reasoningEfforts: ["low", "medium", "xhigh"],
+        },
+      },
+    };
+    const route = routeModel(config, "nim-qwen38/Qwen/Qwen3.8-2.4T-A95B-FP8");
+    const adapter = createOpenAIChatAdapter(route.provider);
+    const body = JSON.parse(adapter.buildRequest(parsedFor(route.modelId, { reasoning: "xhigh" })).body) as Record<string, unknown>;
+    expect(body.reasoning_effort).toBe("xhigh");
+    expect(route.provider.reasoningEfforts).toEqual(["low", "medium", "xhigh"]);
+    expect(PROVIDER_REGISTRY.find(entry => entry.id === "nvidia")?.models ?? []).not.toContain("Qwen/Qwen3.8-2.4T-A95B-FP8");
+  });
+
   test("bare persisted nvidia config inherits parallelToolCalls:false from the registry", () => {
     const route = routeModel(nvidiaConfig(), "nvidia/moonshotai/kimi-k2.6");
     expect(route.provider.parallelToolCalls).toBe(false);
