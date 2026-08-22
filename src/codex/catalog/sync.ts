@@ -777,6 +777,8 @@ export interface ObservedCatalogMergeInput {
   readonly multiAgentV2Enabled: boolean;
   readonly keepNativeChatGptOnV1?: boolean;
   readonly exactComboSlugs: ReadonlySet<string>;
+  /** Routed slugs whose provider/model contract declares an exact reasoning ladder. */
+  readonly exactReasoningSlugs?: ReadonlySet<string>;
   readonly hasPhysicalComboProvider: boolean;
   readonly includeNativeOpenAi: boolean;
   readonly accountBoundEntries: readonly RawEntry[];
@@ -808,6 +810,7 @@ export function mergeCatalogEntriesFromObservedState({
   multiAgentV2Enabled,
   keepNativeChatGptOnV1,
   exactComboSlugs,
+  exactReasoningSlugs = new Set(),
   hasPhysicalComboProvider,
   includeNativeOpenAi,
   accountBoundEntries,
@@ -823,6 +826,7 @@ export function mergeCatalogEntriesFromObservedState({
   const detachedRoutedEntries = routedEntries.map(entry => structuredClone(entry) as RawEntry);
   const detachedAccountBoundEntries = accountBoundEntries
     .map(entry => structuredClone(entry) as RawEntry);
+  const exactReasoningKeys = new Set([...exactReasoningSlugs].map(slugEquivalenceKey));
   const disabledModelKeys = new Set([...disabledModels].map(slugEquivalenceKey));
   const legacyCustomModelKeys = new Set(
     [...legacyCustomModelSlugs].map(slugEquivalenceKey),
@@ -1100,14 +1104,16 @@ export function mergeCatalogEntriesFromObservedState({
     const normalized = normalizeServiceTiers(m);
     if (!isNativeAliasCatalogEntry(normalized)) applyNativeOpenAiContextOverride(normalized, openaiContextCap);
     const exactCombo = isExactComboCatalogEntry(m, exactComboSlugs);
+    const exactReasoning = typeof m.slug === "string"
+      && exactReasoningKeys.has(slugEquivalenceKey(m.slug));
     const e = ensureStrictCatalogFields(normalized, {
       preserveExactInputModalities: exactCombo,
       isRouted: finalRoutedEntrySet.has(m),
     });
     // Mock-max universality (260709): preserved routed entries from disk may predate
-    // the max rung — ensure it here so subagent max spawns validate on every
-    // reasoning-capable entry. max only: 5.6 exact ladders (luna: no ultra) stay intact.
-    if (!exactCombo) {
+    // the max rung — ensure it here so subagent max spawns validate on every generic
+    // reasoning-capable entry. Explicit provider/model ladders and exact combos stay intact.
+    if (!exactCombo && !exactReasoning) {
       const levels = Array.isArray(e.supported_reasoning_levels)
         ? e.supported_reasoning_levels as Array<{ effort?: string }>
         : [];
@@ -1171,6 +1177,7 @@ export function mergeCatalogEntriesForSync(
   ),
   openaiContextCap?: number,
   keepNativeChatGptOnV1 = false,
+  exactReasoningSlugs: ReadonlySet<string> = new Set(),
 ): RawEntry[] {
   // Retained for source compatibility with the original helper contract. Raw provider ids must
   // not suppress same-named native rows; actual admitted combo entries own that decision now.
@@ -1202,6 +1209,7 @@ export function mergeCatalogEntriesForSync(
     multiAgentV2Enabled: isMultiAgentV2Enabled(),
     keepNativeChatGptOnV1,
     exactComboSlugs,
+    exactReasoningSlugs,
     hasPhysicalComboProvider,
     includeNativeOpenAi,
     accountBoundEntries,
@@ -1529,6 +1537,11 @@ function writeRetainedCatalogSync({
     multiAgentV2Enabled,
     openaiContextCap,
   });
+  const exactReasoningSlugs = new Set(
+    orderedGoModels
+      .filter(model => model.preserveReasoningEfforts === true)
+      .map(catalogModelSlug),
+  );
   // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields and append
   // routed providers as namespaced slugs. Cursor and other adopted providers can expose model ids
   // like `gpt-5.5`; those must not delete the native OpenAI/Codex base row.
@@ -1595,6 +1608,7 @@ function writeRetainedCatalogSync({
     multiAgentV2Enabled,
     keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
     exactComboSlugs,
+    exactReasoningSlugs,
     hasPhysicalComboProvider,
     includeNativeOpenAi,
     accountBoundEntries,
