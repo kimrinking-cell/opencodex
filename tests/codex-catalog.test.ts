@@ -2903,6 +2903,32 @@ function mergeObservedForTest(
 }
 
 describe("Codex catalog routed normalization", () => {
+  test("final sync preserves an explicitly exact routed reasoning ladder", () => {
+    const slug = "tokenrouter/qwen-qwen3.8-max-free";
+    const routed = {
+      ...nativeTemplate(),
+      slug,
+      owned_by: "tokenrouter",
+      description: "Routed via opencodex → tokenrouter (tokenrouter).",
+      supported_reasoning_levels: ["low", "medium", "xhigh"]
+        .map(effort => ({ effort, description: effort })),
+      default_reasoning_level: "xhigh",
+    };
+
+    const merged = mergeObservedForTest({
+      catalogModels: [],
+      routedEntries: [routed],
+      gatheredProviderNames: new Set(["tokenrouter"]),
+      // Exercise the raw config spelling against the encoded Codex-facing slug.
+      exactReasoningSlugs: new Set(["tokenrouter/qwen/qwen3.8-max-free"]),
+    });
+    const row = merged.find(entry => entry.slug === slug);
+
+    expect((row?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "medium", "xhigh"]);
+    expect(row?.default_reasoning_level).toBe("xhigh");
+  });
+
   test("does not reuse a routed native alias as the native catalog template", () => {
     const routedAlias = {
       ...nativeTemplate(),
