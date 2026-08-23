@@ -96,6 +96,7 @@ import {
 } from "../relay";
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
+import { paceRequestStart } from "../../lib/request-pacer";
 
 
 export function disableResponsesRequestTimeout(req: Request, server: Pick<Server<WsData>, "timeout"> | undefined): boolean {
@@ -131,7 +132,17 @@ export function safeOriginLabel(url: string): string {
 
 
 export function providerFetch(provider: OcxProviderConfig): typeof globalThis.fetch {
-  return (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  const executor = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  if (provider.maxRequestsPerMinute === undefined) return executor;
+  const scope = provider.baseUrl.trim().replace(/\/+$/, "").toLowerCase();
+  const pacedFetch = async (input: Parameters<typeof globalThis.fetch>[0], init?: Parameters<typeof globalThis.fetch>[1]) => {
+    await paceRequestStart(scope, provider.maxRequestsPerMinute, init?.signal ?? undefined);
+    return executor(input, init);
+  };
+  const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
+    executor.preconnect?.(...args);
+  };
+  return Object.assign(pacedFetch, { preconnect });
 }
 
 

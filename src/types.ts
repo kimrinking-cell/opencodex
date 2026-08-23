@@ -1194,6 +1194,11 @@ export interface ProviderCostOverlay {
  */
 export interface OcxProviderConfig {
   adapter: string;
+  /**
+   * Optional client-side request-start ceiling shared by all requests to this provider base URL.
+   * Requests are paced evenly; streaming response lifetimes are not serialized.
+   */
+  maxRequestsPerMinute?: number;
   /** Cursor MCP compatibility bounds; positive integers when configured. */
   mcpMaxTools?: number;
   mcpMaxSchemaBytes?: number;
