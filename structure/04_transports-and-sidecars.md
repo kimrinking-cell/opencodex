@@ -263,16 +263,15 @@ The two-shape contract is mirror-commented in `src/server/index.ts`; the real
 and the platform matrix lives in `tests/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
 
-Canonical ChatGPT forward streaming has one transport-specific exception. A
-stable Bun runtime at or above 1.4.0 may use Codex's upstream
-`responses_websockets` transport; bundled Bun 1.3.14, prereleases, and
-unverifiable runtime identities stay on HTTP/SSE. A successful upstream WS
-response is re-encoded to the same SSE surface and forced through the bounded
-eager single-reader relay instead of `tee()`: raw and enveloped frames are capped
-at 4 MiB and the WS producer queue at 8 MiB. Overflow closes the upstream and
-the downstream relay emits its terminal `response.failed` event plus `[DONE]`.
-Pre-open HTTP fallback remains unmarked and follows the ordinary configured
-stream path.
+Canonical ChatGPT forward streaming is pinned to HTTP/SSE by the local
+reliability policy in `providerFetch`. A WebSocket that closes after opening but
+before a terminal event cannot be replayed safely because the upstream turn may
+already have started, so production routing does not enter the
+`responses_websockets` transport. The bounded WS implementation and its direct
+capability, frame, queue, and close tests remain in place as dormant code for an
+explicit future re-evaluation or rollback. While this policy is active, every
+canonical forward turn follows the ordinary configured HTTP/SSE relay and
+heartbeat contract.
 
 Translated response request-log tracking and the heartbeat relay also reuse
 `createSseInspector`. This keeps every client-facing SSE observation path on
