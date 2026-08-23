@@ -26,6 +26,10 @@ const UPGRADE_DEADLINE_MS = 10_000;
 // a WebSocket cannot be paused when a ReadableStream applies backpressure, so
 // an upstream that outruns the consumer must be disconnected.
 export const MAX_CODEX_WS_FRAME_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
+// Large response.create messages have been observed to upgrade successfully and
+// then close without a Responses terminal event. Keep those requests on HTTP/SSE
+// before opening a socket: resending after open could duplicate a started turn.
+export const MAX_CODEX_WS_REQUEST_FRAME_BYTES = 4 * 1024 * 1024;
 export const MAX_CODEX_WS_QUEUE_BYTES = 8 * 1024 * 1024;
 export const MIN_BOUNDED_CODEX_WS_BUN_VERSION = "1.4.0";
 
@@ -127,6 +131,17 @@ export function codexWsUpstreamFetch(
     return sseFallback(url, init);
   }
 
+  const encoder = new TextEncoder();
+  // JS string length is a cheap UTF-8 lower bound. Use the encoded size for the
+  // final admission decision so non-ASCII requests cannot cross the boundary.
+  if (frameText.length > MAX_CODEX_WS_REQUEST_FRAME_BYTES) {
+    return sseFallback(url, init);
+  }
+  const requestFrameBytes = encoder.encode(frameText).byteLength;
+  if (requestFrameBytes > MAX_CODEX_WS_REQUEST_FRAME_BYTES) {
+    return sseFallback(url, init);
+  }
+
   const headers: Record<string, string> = {};
   new Headers(init.headers ?? {}).forEach((value, key) => {
     // HTTP-body framing headers do not apply to a WS handshake.
@@ -158,7 +173,6 @@ export function codexWsUpstreamFetch(
     let settledPreOpen = false;
     let terminal = false;
     let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
-    const encoder = new TextEncoder();
 
     const failStream = (message: string) => {
       if (terminal) return;
@@ -279,7 +293,7 @@ export function codexWsUpstreamFetch(
       }
     });
 
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (event) => {
       signal?.removeEventListener("abort", onAbort);
       if (!opened) {
         if (settledPreOpen) return;
@@ -297,7 +311,14 @@ export function codexWsUpstreamFetch(
         // here would reach clients with no response.completed/failed at all —
         // relaySseWithFailedTail() only synthesizes a failed terminal when the
         // body read THROWS. Error the stream like a reset TCP socket.
-        try { controller.error(new Error("codex websocket closed before a Responses terminal event")); } catch { /* stream already done */ }
+        const close = event as CloseEvent;
+        const code = Number.isInteger(close.code) ? close.code : "unknown";
+        const wasClean = typeof close.wasClean === "boolean" ? close.wasClean : "unknown";
+        try {
+          controller.error(new Error(
+            `codex websocket closed before a Responses terminal event (code=${code}, wasClean=${wasClean}, requestFrameBytes=${requestFrameBytes})`,
+          ));
+        } catch { /* stream already done */ }
       }
     });
 

@@ -10,6 +10,7 @@ import {
   isCodexWsUpstreamResponse,
   MAX_CODEX_WS_FRAME_BYTES,
   MAX_CODEX_WS_QUEUE_BYTES,
+  MAX_CODEX_WS_REQUEST_FRAME_BYTES,
   shouldUseCodexWsUpstream as rawShouldUseCodexWsUpstream,
 } from "../src/server/responses/ws-upstream";
 import type { OcxProviderConfig } from "../src/types";
@@ -530,18 +531,61 @@ describe("codexWsUpstreamFetch", () => {
     expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
 
+  test("keeps an oversized response.create frame on HTTP SSE before opening a socket", async () => {
+    const sentinel = new Response("sse-large-request", { status: 200 });
+    let fallbackCalls = 0;
+    const fallback = (async () => {
+      fallbackCalls += 1;
+      return sentinel;
+    }) as unknown as typeof fetch;
+
+    const response = await codexWsUpstreamFetch(
+      CODEX_URL,
+      streamingInit({ padding: "x".repeat(MAX_CODEX_WS_REQUEST_FRAME_BYTES) }),
+      fallback,
+    );
+
+    expect(response).toBe(sentinel);
+    expect(isCodexWsUpstreamResponse(response)).toBe(false);
+    expect(fallbackCalls).toBe(1);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  test("measures the request frame limit in UTF-8 bytes", async () => {
+    const sentinel = new Response("sse-large-unicode-request", { status: 200 });
+    let fallbackCalls = 0;
+    const fallback = (async () => {
+      fallbackCalls += 1;
+      return sentinel;
+    }) as unknown as typeof fetch;
+    const unicodePadding = "€".repeat(Math.ceil(MAX_CODEX_WS_REQUEST_FRAME_BYTES / 3));
+    expect(unicodePadding.length).toBeLessThan(MAX_CODEX_WS_REQUEST_FRAME_BYTES);
+
+    const response = await codexWsUpstreamFetch(
+      CODEX_URL,
+      streamingInit({ padding: unicodePadding }),
+      fallback,
+    );
+
+    expect(response).toBe(sentinel);
+    expect(fallbackCalls).toBe(1);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   test("errors the stream when the socket drops before a Responses terminal event", async () => {
     installFake(ws => {
       ws.emit("open", {});
       ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
-      ws.close();
+      ws.emit("close", { code: 1009, wasClean: true });
     });
     const fallback = () => { throw new Error("fallback must not run after open"); };
     const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), fallback as unknown as typeof fetch);
     // A clean EOF here would let a terminal-less stream reach clients:
     // relaySseWithFailedTail() only synthesizes response.failed when the body
     // read throws. The read must therefore reject, like a reset TCP socket.
-    await expect(response.text()).rejects.toThrow("closed before a Responses terminal event");
+    await expect(response.text()).rejects.toThrow(
+      /closed before a Responses terminal event \(code=1009, wasClean=true, requestFrameBytes=\d+\)/,
+    );
   });
 
   test("rejects an oversized upstream frame before parsing or enqueueing it", async () => {

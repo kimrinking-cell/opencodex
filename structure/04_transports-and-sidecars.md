@@ -247,8 +247,11 @@ response is re-encoded to the same SSE surface and forced through the bounded
 eager single-reader relay instead of `tee()`: raw and enveloped frames are capped
 at 4 MiB and the WS producer queue at 8 MiB. Overflow closes the upstream and
 the downstream relay emits its terminal `response.failed` event plus `[DONE]`.
-Pre-open HTTP fallback remains unmarked and follows the ordinary configured
-stream path.
+An outbound `response.create` frame above 4 MiB stays on HTTP/SSE before a socket
+is opened, because retrying after an opened socket drops could duplicate a turn
+that already started. A pre-terminal close records its close code, clean-close
+state, and admitted request-frame byte count. Pre-open HTTP fallback remains
+unmarked and follows the ordinary configured stream path.
 
 Translated response request-log tracking and the heartbeat relay also reuse
 `createSseInspector`. This keeps every client-facing SSE observation path on
