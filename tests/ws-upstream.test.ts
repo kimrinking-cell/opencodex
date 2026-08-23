@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
-import { providerFetch } from "../src/server/responses/fetch-helpers";
+import { CODEX_WS_UPSTREAM_ENABLED, providerFetch } from "../src/server/responses/fetch-helpers";
 import { handleResponses } from "../src/server/responses";
 import { isEagerRelaySseResponse } from "../src/server/relay";
 import { isWin32EagerRewrite } from "../src/lib/bun-stream-caps";
@@ -211,7 +211,7 @@ describe("providerFetch routing", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  test("routes eligible Codex streaming turns to WS and everything else to the base fetch", async () => {
+  test("pins eligible Codex streaming turns and all other requests to the base HTTP fetch", async () => {
     installFake(ws => {
       ws.emit("open", {});
       ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: {} }) });
@@ -226,11 +226,9 @@ describe("providerFetch routing", () => {
     } as unknown as OcxProviderConfig;
     const wrapped = providerFetch(provider, BOUNDED_WS_RUNTIME);
 
-    // Eligible: WS adapter serves it, base fetch untouched.
-    const wsResponse = await wrapped(CODEX_URL, streamingInit());
-    expect(wsResponse.headers.get("content-type")).toContain("text/event-stream");
-    expect(baseCalls).toHaveLength(0);
-    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(CODEX_WS_UPSTREAM_ENABLED).toBe(false);
+    // Even a WS-capable stable runtime follows the production HTTP/SSE policy.
+    expect(await wrapped(CODEX_URL, streamingInit())).toBeInstanceOf(Response);
 
     // Non-streaming body: base fetch.
     await wrapped(CODEX_URL, { method: "POST", body: JSON.stringify({ model: "m" }) });
@@ -238,12 +236,12 @@ describe("providerFetch routing", () => {
     await wrapped("https://api.openai.com/v1/responses", streamingInit());
     // Request-object input: base fetch (WS path only handles string URLs).
     await wrapped(new Request(CODEX_URL, streamingInit() as RequestInit));
-    expect(baseCalls).toHaveLength(3);
-    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(baseCalls).toHaveLength(4);
+    expect(FakeWebSocket.instances).toHaveLength(0);
   });
 });
 
-describe("handleResponses Codex WS relay selection", () => {
+describe("handleResponses Codex HTTP SSE relay selection", () => {
   function forwardConfig(): OcxConfig {
     return {
       port: 0,
@@ -268,28 +266,13 @@ describe("handleResponses Codex WS relay selection", () => {
     });
   }
 
-  test("a successful WS upgrade bypasses the configured legacy tee path", async () => {
+  test("a WS-capable runtime stays on the configured HTTP SSE path", async () => {
     installFake(ws => {
       ws.emit("open", {});
       ws.emit("message", {
         data: JSON.stringify({ type: "response.completed", response: { id: "r1", status: "completed", output: [] } }),
       });
     });
-
-    const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" }, {
-      codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
-    });
-
-    expect(response.status).toBe(200);
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(isEagerRelaySseResponse(response)).toBe(true);
-    const text = await response.text();
-    expect(text).toContain("response.completed");
-    expect(text).toContain("data: [DONE]");
-  });
-
-  test("an HTTP fallback remains on the configured legacy tee path", async () => {
-    installFake(ws => ws.close());
     globalThis.fetch = (async () => new Response(
       `event: response.completed\ndata: ${JSON.stringify({
         type: "response.completed",
@@ -302,33 +285,11 @@ describe("handleResponses Codex WS relay selection", () => {
       codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
     });
 
-    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(response.status).toBe(200);
+    expect(FakeWebSocket.instances).toHaveLength(0);
     expect(isEagerRelaySseResponse(response)).toBe(EAGER_RELAY_FORCED_BY_PLATFORM);
-    expect(await response.text()).toContain("response.completed");
-  });
-
-  test("a WS queue overflow fails closed through the bounded eager relay", async () => {
-    const delta = "x".repeat(Math.floor(MAX_CODEX_WS_QUEUE_BYTES / 3));
-    installFake(ws => {
-      ws.emit("open", {});
-      for (let index = 0; index < 4; index += 1) {
-        ws.emit("message", {
-          data: JSON.stringify({ type: "response.output_text.delta", delta, index }),
-        });
-      }
-    });
-
-    const logCtx = { model: "", provider: "" };
-    const response = await handleResponses(request(), forwardConfig(), logCtx, {
-      codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
-    });
-
-    expect(isEagerRelaySseResponse(response)).toBe(true);
     const text = await response.text();
-    expect(text).toContain("event: response.failed");
-    expect(text).toContain("data: [DONE]");
-    expect(logCtx.activeAttempt?.streamAborted).toBe(true);
-    expect(FakeWebSocket.instances[0].closed).toBe(true);
+    expect(text).toContain("response.completed");
   });
 
   test.skipIf(bunSupportsBoundedCodexWsRelay())(
@@ -350,7 +311,7 @@ describe("handleResponses Codex WS relay selection", () => {
     },
   );
 
-  // The two cases above assert the marker against `EAGER_RELAY_FORCED_BY_PLATFORM`,
+  // The HTTP/SSE cases above assert the marker against `EAGER_RELAY_FORCED_BY_PLATFORM`,
   // which is only the right expectation while `needsClientRewrite` is genuinely
   // `true`. Rather than assert that through the rewrite factory — which would stay
   // green if `handleResponses` stopped registering it — this drives a real Responses
