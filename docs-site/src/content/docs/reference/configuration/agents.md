@@ -57,6 +57,11 @@ message only when a preferred model, eligible roster, or fallback chain exists. 
 has a 700-character budget and drops the roster first if necessary. Guidance is deduplicated across
 replay prefixes and inserted before a trailing `compaction_trigger`.
 
+All built-in model and effort guidance is scoped to overrides on the active `spawn_agent` tool. It
+does not restrict model fields or reasoning settings used by other tools, evaluation clients, or APIs.
+V1 proactive guidance supersedes only an earlier requirement for an explicit user request before
+spawning; it does not supersede other safety, permission, or action-authorization requirements.
+
 `injectionModel` and `injectionEffort` are advisory unless native-default sync is enabled. The built-in
 v2 text asks Codex to pass supported model/effort overrides to `spawn_agent` with
 `fork_turns: "none"`. A custom `injectionPrompt` substitutes missing values with an empty string.
@@ -86,6 +91,9 @@ opencodex skips disabled, unroutable, unhealthy, cooling-down, or quota-threshol
 availability snapshot is cached for `subagentModelFallbackPollMs`. Encrypted child tasks can restrict
 the chain to canonical native ChatGPT targets; if none can read the encrypted payload, the request
 fails instead of routing unreadable ciphertext elsewhere.
+
+Fallback selection is a proxy-side rewrite of the spawned child's `thread_spawn` request. The agent
+does not need to select or pass the fallback model as a `spawn_agent` override.
 
 ```json
 {

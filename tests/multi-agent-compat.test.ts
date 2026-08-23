@@ -130,7 +130,9 @@ describe("multiAgentGuidanceText", () => {
       const text = await multiAgentGuidanceText(parsed, options, {
         collectCatalogState: () => ({ state }),
       });
-      expect(text).toContain("do not set");
+      expect(text).toContain("For calls to the active spawn_agent tool only");
+      expect(text).toContain("omit its model and reasoning_effort overrides");
+      expect(text).toContain("does not restrict model fields or reasoning settings on other tools, clients, or APIs");
       expect(text).not.toContain("Preferred sub-agent");
       expect(text).not.toContain("Available models");
     }
@@ -693,6 +695,9 @@ describe("multiAgentGuidanceText", () => {
       },
     );
     expect(text).toContain("Proactive multi-agent delegation is active");
+    expect(text).toContain("v1 spawn_agent surface");
+    expect(text).toContain("Only earlier instructions requiring an explicit user request before spawning sub-agents are superseded");
+    expect(text).toContain("all other safety, permission, and action-authorization requirements remain in force");
     expect(text).not.toContain("anthropic/claude-sonnet-5");
     expect(text).not.toContain("Preferred sub-agent");
     expect(text).not.toContain("Available models");

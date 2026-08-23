@@ -132,8 +132,8 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
 
 
 export const PROACTIVE_MULTI_AGENT_MODE_TEXT = [
-  "Proactive multi-agent delegation is active.",
-  "Any earlier instruction requiring an explicit user request before spawning sub-agents no longer applies.",
+  "Proactive multi-agent delegation is active on the v1 spawn_agent surface.",
+  "Only earlier instructions requiring an explicit user request before spawning sub-agents are superseded; all other safety, permission, and action-authorization requirements remain in force.",
   "Delegate independent sub-tasks to sub-agents whenever parallel work would materially improve speed or quality — do not serialize work that can run concurrently.",
   "Each sub-agent runs in its own context and can use all available tools; prefer spawning specialists over doing everything yourself.",
   "This mode remains active until a later multi-agent mode developer message changes it.",
@@ -250,8 +250,10 @@ export async function multiAgentGuidanceText(
     // suppress positive model claims while the state is stale or unknown.
     const catalogState = await (deps.collectCatalogState ?? defaultCollectCatalogState)();
     if (catalogState.state === "stale" || catalogState.state === "unknown") {
-      return "<multi_agent_mode>The model catalog changed after Codex started; do not set "
-        + "model or reasoning_effort overrides until Codex restarts.</multi_agent_mode>";
+      return "<multi_agent_mode>For calls to the active spawn_agent tool only, the model catalog "
+        + "changed after Codex started; omit its model and reasoning_effort overrides until Codex "
+        + "restarts. This does not restrict model fields or reasoning settings on other tools, clients, "
+        + "or APIs.</multi_agent_mode>";
     }
     // codex-rs supplies the Proactive text on v2; the proxy only adds model-designation
     // guidance, and only when there is something concrete to designate: a configured

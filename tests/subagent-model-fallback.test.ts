@@ -1161,7 +1161,10 @@ describe("subagent model fallback chain", () => {
   });
 
   test("subagentFallbackGuidanceText renders configured chain", () => {
-    expect(subagentFallbackGuidanceText(cfg())).toContain("gpt-5.6-sol");
+    const guidance = subagentFallbackGuidanceText(cfg());
+    expect(guidance).toContain("gpt-5.6-sol");
+    expect(guidance).toContain("automatically on the proxy side");
+    expect(guidance).toContain("agent does not need to set a fallback model override");
     expect(subagentFallbackGuidanceText(cfg({ subagentModelFallback: undefined }))).toBe("");
   });
 });
