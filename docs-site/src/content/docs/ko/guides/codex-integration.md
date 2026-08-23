@@ -190,8 +190,9 @@ turn을 받았다는 뜻은 **아닙니다**. 다음 신호가 하나 이상이�
 취급하세요.
 
 - assistant message가 없거나 consumer가 볼 content가 비어 있음(`last-agent-message`도 없음);
-- usage의 `outputTokens=0`, 또는 해당 필드를 제공하는 경우 `firstOutputMs=null`;
+- 각 필드가 제공되는 경우 usage의 `outputTokens=0` 또는 `firstOutputMs=null`;
 - terminal/completed event(예: `response.completed`)가 없거나 Codex가 이를 소비하기 전에 stream이 끝남;
+- `response.failed` 또는 `response.incomplete` terminal event가 있어도 실패/미완료를 뜻하며, 바깥 HTTP status가 `200`이어도 성공적인 완료가 아님;
 - 바깥 HTTP status는 `200`이어도 body 또는 SSE data frame 안에 inline `error` envelope가 있음.
 
 이 문제는 성공한 요청이 아니라 계층별 실패로 진단하세요.

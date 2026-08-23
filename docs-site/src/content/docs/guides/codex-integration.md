@@ -306,9 +306,11 @@ of these signals is present:
 
 - the assistant message is missing or has empty consumer-visible content (including no
   `last-agent-message`);
-- usage reports `outputTokens=0`, or `firstOutputMs=null` when that field is available;
+- usage reports `outputTokens=0` (when that field is available), or `firstOutputMs=null` (when that field is available);
 - the stream has no terminal/completed event (for example, no `response.completed`), or ends before
   Codex can consume one; or
+- a `response.failed` or `response.incomplete` terminal event is present; either is failure/incomplete,
+  not successful completion, even when the outer HTTP status is `200`; or
 - the body or an SSE data frame contains an inline `error` envelope even though the outer HTTP status
   is `200`.
 
