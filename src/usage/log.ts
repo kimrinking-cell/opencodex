@@ -52,6 +52,8 @@ export interface PersistedUsageAttempt {
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  /** True when the named reasoning field was intentionally omitted on the wire. */
+  reasoningWireOmitted?: boolean;
 }
 
 export interface PersistedUsageEntry {
@@ -78,6 +80,8 @@ export interface PersistedUsageEntry {
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  /** True when the named reasoning field was intentionally omitted on the wire. */
+  reasoningWireOmitted?: boolean;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -304,6 +308,9 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     ...(typeof attempt.reasoningWireField === "string" && attempt.reasoningWireField
       ? { reasoningWireField: capMetadataString(attempt.reasoningWireField) }
       : {}),
+    ...(isValidReasoningWireOmission(attempt.reasoningWireField, attempt.reasoningWireValue, attempt.reasoningWireOmitted)
+      ? { reasoningWireOmitted: true }
+      : {}),
     ...(isValidReasoningWireValue(attempt.reasoningWireField, attempt.reasoningWireValue)
       ? typeof attempt.reasoningWireValue === "string"
         ? { reasoningWireValue: capMetadataString(attempt.reasoningWireValue) }
@@ -325,6 +332,17 @@ export function isValidReasoningWireValue(
   return (typeof wireValue === "string" && wireValue.length > 0)
     || (typeof wireValue === "number" && Number.isFinite(wireValue) && wireValue >= 0)
     || (wireField === "reasoning.enabled" && typeof wireValue === "boolean");
+}
+
+function isValidReasoningWireOmission(
+  wireField: unknown,
+  wireValue: unknown,
+  wireOmitted: unknown,
+): boolean {
+  return wireOmitted === true
+    && typeof wireField === "string"
+    && wireField.length > 0
+    && wireValue === undefined;
 }
 
 function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
@@ -379,6 +397,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
       : {}),
     ...(typeof entry.reasoningWireField === "string" && entry.reasoningWireField
       ? { reasoningWireField: capMetadataString(entry.reasoningWireField) }
+      : {}),
+    ...(isValidReasoningWireOmission(entry.reasoningWireField, entry.reasoningWireValue, entry.reasoningWireOmitted)
+      ? { reasoningWireOmitted: true }
       : {}),
     ...(isValidReasoningWireValue(entry.reasoningWireField, entry.reasoningWireValue)
       ? typeof entry.reasoningWireValue === "string"

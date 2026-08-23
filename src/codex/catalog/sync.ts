@@ -10,7 +10,7 @@ import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCa
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
-import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
+import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, isTokenRouterQwen38MaxFreeTarget, modelRecordValue, sanitizeCodexReasoningEfforts, TOKENROUTER_QWEN38_MAX_FREE_DEFAULT_REASONING_EFFORT, TOKENROUTER_QWEN38_MAX_FREE_REASONING_EFFORTS } from "../../reasoning-effort";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
@@ -247,7 +247,17 @@ export function deriveEntry(
   exactComboSlugs: ReadonlySet<string> = new Set(),
   contextCap?: number,
 ): RawEntry {
-  const preserveExact = isExactComboCatalogModel(model, exactComboSlugs);
+  // The TokenRouter free Qwen route has a genuinely named low/medium/xhigh
+  // ladder. Preserve that exact capability in the Codex catalog instead of the
+  // general routed-model mock max/ultra additions used for subagent UX.
+  const preserveExact = isExactComboCatalogModel(model, exactComboSlugs)
+    || isTokenRouterQwen38MaxFreeTarget(model?.provider, model?.id ?? "");
+  const catalogReasoningEfforts = isTokenRouterQwen38MaxFreeTarget(model?.provider, model?.id ?? "")
+    ? [...TOKENROUTER_QWEN38_MAX_FREE_REASONING_EFFORTS]
+    : model?.reasoningEfforts;
+  const catalogDefaultReasoningEffort = isTokenRouterQwen38MaxFreeTarget(model?.provider, model?.id ?? "")
+    ? TOKENROUTER_QWEN38_MAX_FREE_DEFAULT_REASONING_EFFORT
+    : model?.defaultReasoningEffort;
   const isRouted = model !== undefined;
   if (!isRouted && !slug.includes("/")) {
     // Supported native slug covered by the upstream snapshot: use the REAL entry (exact
@@ -283,7 +293,7 @@ export function deriveEntry(
         // (leaking that into base_instructions is a non-first-party signature → ToS risk).
         e.base_instructions = identifyRoutedModel(e.base_instructions, modelName);
       }
-      applyReasoningLevels(e, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+      applyReasoningLevels(e, catalogReasoningEfforts, catalogDefaultReasoningEffort, preserveExact);
       normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true);
       if (model) applyCatalogMetadata(e, model.provider, model.id, model.contextCap);
       applyCatalogModelMetadata(e, model);
@@ -318,7 +328,7 @@ export function deriveEntry(
   };
   if (isRouted) {
     applyRoutedCodexToolMode(entry);
-    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
+    applyReasoningLevels(entry, catalogReasoningEfforts, catalogDefaultReasoningEffort, preserveExact);
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);

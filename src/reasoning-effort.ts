@@ -14,6 +14,64 @@ export const CODEX_REASONING_LEVELS: { effort: string; description: string }[] =
 const CODEX_REASONING_ORDER = CODEX_REASONING_LEVELS.map(l => l.effort);
 const CODEX_REASONING_SET = new Set(CODEX_REASONING_ORDER);
 
+/**
+ * TokenRouter's free Qwen3.8-Max route is not the same contract as Alibaba's
+ * official `qwen3.8-max`. The provider advertises Qwen's named low/medium/xhigh
+ * ladder, with the upstream default represented by an omitted effort field.
+ * Keep this policy at the shared reasoning boundary, but require BOTH provider
+ * identity and the exact native model id: another provider may expose the same
+ * model name with a different wire contract.
+ */
+const TOKENROUTER_PROVIDER_NAME = "tokenrouter";
+const TOKENROUTER_BASE_URL = "https://api.tokenrouter.com/v1";
+const TOKENROUTER_QWEN38_MAX_FREE_MODEL_ID = "qwen/qwen3.8-max-free";
+export const TOKENROUTER_QWEN38_MAX_FREE_REASONING_EFFORTS = ["low", "medium", "xhigh"] as const;
+export const TOKENROUTER_QWEN38_MAX_FREE_DEFAULT_REASONING_EFFORT = "xhigh" as const;
+
+type TokenRouterProviderIdentity = Pick<OcxProviderConfig, "baseUrl"> | string | undefined;
+
+function normalizedProviderBaseUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value.trim());
+    if (url.username || url.password || url.search || url.hash) return undefined;
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return `${url.protocol.toLowerCase()}//${url.host.toLowerCase()}${pathname}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function isTokenRouterProvider(identity: TokenRouterProviderIdentity): boolean {
+  if (typeof identity === "string") {
+    return identity.trim().toLowerCase() === TOKENROUTER_PROVIDER_NAME;
+  }
+  return identity !== undefined
+    && normalizedProviderBaseUrl(identity.baseUrl) === normalizedProviderBaseUrl(TOKENROUTER_BASE_URL);
+}
+
+/** Exact provider + native model guard used by catalog and adapter reasoning paths. */
+export function isTokenRouterQwen38MaxFreeTarget(
+  provider: TokenRouterProviderIdentity,
+  modelId: string,
+): boolean {
+  return isTokenRouterProvider(provider) && modelId === TOKENROUTER_QWEN38_MAX_FREE_MODEL_ID;
+}
+
+/**
+ * Compatibility overload: a model-only call is deliberately never a match.
+ * Keeping that overload avoids making stale third-party callers fail to compile
+ * while ensuring the special route can never become a global model-id exception.
+ */
+export function isTokenRouterQwen38MaxFreeModel(modelId: string): false;
+export function isTokenRouterQwen38MaxFreeModel(provider: TokenRouterProviderIdentity, modelId: string): boolean;
+export function isTokenRouterQwen38MaxFreeModel(
+  providerOrModel: TokenRouterProviderIdentity,
+  modelId?: string,
+): boolean {
+  if (modelId === undefined) return false;
+  return isTokenRouterQwen38MaxFreeTarget(providerOrModel, modelId);
+}
+
 /** True when `effort` is a member of the Codex reasoning ladder (low..ultra). */
 export function isCodexReasoningEffort(effort: string): boolean {
   return CODEX_REASONING_SET.has(effort);
@@ -80,9 +138,37 @@ export function sanitizeCodexReasoningEfforts(efforts: readonly string[] | undef
 export function configuredReasoningEfforts(provider: OcxProviderConfig, modelId: string): string[] | undefined {
   if (modelInList(provider.noReasoningModels, modelId)) return [];
   const modelEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId);
+
+  // Heal stale generated/configured metadata to the actual free-route ladder.
+  // `noReasoningModels` remains the explicit opt-out; ordinary stale arrays do
+  // not get to erase a known upstream capability.
+  if (isTokenRouterQwen38MaxFreeTarget(provider, modelId)) {
+    return [...TOKENROUTER_QWEN38_MAX_FREE_REASONING_EFFORTS];
+  }
+
   if (modelEfforts !== undefined) return healMappedTiers(provider, modelId, sanitizeCodexReasoningEfforts(modelEfforts) ?? []);
   if (provider.reasoningEfforts !== undefined) return healMappedTiers(provider, modelId, sanitizeCodexReasoningEfforts(provider.reasoningEfforts) ?? []);
   return undefined;
+}
+
+/**
+ * Resolve a catalog default after provider/model capability hints are known.
+ * TokenRouter's free Qwen route defaults to the upstream named xhigh tier;
+ * high/max/ultra are aliases for that top tier at the request boundary.
+ */
+export function configuredDefaultReasoningEffort(
+  provider: OcxProviderConfig,
+  modelId: string,
+  fallback?: string,
+): string | undefined {
+  if (!isTokenRouterQwen38MaxFreeTarget(provider, modelId)) {
+    return modelRecordValue(provider.modelDefaultReasoningEfforts, modelId) ?? fallback;
+  }
+  const supported = configuredReasoningEfforts(provider, modelId);
+  if (supported !== undefined) return supported.length > 0
+    ? TOKENROUTER_QWEN38_MAX_FREE_DEFAULT_REASONING_EFFORT
+    : undefined;
+  return fallback;
 }
 
 /**
@@ -135,8 +221,21 @@ export function reasoningEffortMapFor(provider: OcxProviderConfig, modelId: stri
  * (`xhigh` stays `xhigh`, `max` stays `max`); provider maps are only for real upstream aliases.
  */
 export function mapReasoningEffort(provider: OcxProviderConfig, modelId: string, requested: string | undefined): string | undefined {
-  if (!requested) return undefined;
   if (modelInList(provider.noReasoningModels, modelId)) return undefined;
+
+  // Qwen's xhigh is the provider default on this exact TokenRouter route. Its
+  // upstream rejects a literal xhigh value, so all top-tier Codex aliases are
+  // represented by an omitted field. `resolveReasoningEffort` supplies the
+  // corresponding diagnostic metadata; this function remains the string-only
+  // wire helper used by existing callers.
+  if (isTokenRouterQwen38MaxFreeTarget(provider, modelId)) {
+    if (!requested) return undefined;
+    const codex = requestToCodexEffort(requested);
+    if (codex === "xhigh" || codex === "high" || codex === "max" || codex === "ultra") return undefined;
+    if (codex === "low" || codex === "medium") return codex;
+    return undefined;
+  }
+  if (!requested) return undefined;
 
   // Upstream codex-rs converts ultra -> max before ANY provider request (core/src/client.rs
   // `reasoning_effort_for_request`), so "ultra" must never influence the provider wire — not even
@@ -154,4 +253,49 @@ export function mapReasoningEffort(provider: OcxProviderConfig, modelId: string,
   const wire = codexEffort === "ultra" ? "max" : codexEffort;
   if (wireMap && Object.prototype.hasOwnProperty.call(wireMap, wire)) return wireMap[wire];
   return wire;
+}
+
+/** Exact outbound reasoning decision, including an intentional omitted field. */
+export interface ReasoningEffortResolution {
+  /** Caller intent; omitted when the caller left the effort unspecified. */
+  requestedEffort?: string;
+  /** Adapter-normalized/provider-effective tier shown in diagnostics. */
+  effectiveEffort: string;
+  /** Exact string value to put on the upstream wire, when one is emitted. */
+  wireValue?: string;
+  /** True when the named field must be omitted rather than sent with a value. */
+  wireOmitted?: true;
+}
+
+export function resolveReasoningEffort(
+  provider: OcxProviderConfig,
+  modelId: string,
+  requested: string | undefined,
+): ReasoningEffortResolution | undefined {
+  if (modelInList(provider.noReasoningModels, modelId)) return undefined;
+  if (isTokenRouterQwen38MaxFreeTarget(provider, modelId)) {
+    if (requested === undefined) {
+      return {
+        effectiveEffort: "provider-default/inferred-xhigh",
+        wireOmitted: true,
+      };
+    }
+    const codex = requestToCodexEffort(requested);
+    if (codex === "xhigh" || codex === "high" || codex === "max" || codex === "ultra") {
+      return {
+        requestedEffort: requested,
+        effectiveEffort: "xhigh",
+        wireOmitted: true,
+      };
+    }
+    if (codex === "low" || codex === "medium") {
+      return { requestedEffort: requested, effectiveEffort: codex, wireValue: codex };
+    }
+    return undefined;
+  }
+  if (requested === undefined) return undefined;
+  const wireValue = mapReasoningEffort(provider, modelId, requested);
+  return wireValue === undefined
+    ? undefined
+    : { requestedEffort: requested, effectiveEffort: wireValue, wireValue };
 }

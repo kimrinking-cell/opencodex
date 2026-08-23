@@ -1,7 +1,7 @@
 import type { AdapterRequest, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall, OcxUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
-import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { mapReasoningEffort, modelRecordValue, resolveReasoningEffort } from "../reasoning-effort";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { isDebugEnabled } from "../lib/debug-settings";
@@ -214,6 +214,14 @@ type InvalidToolCallReason =
   | "tool_call_function_name_blank"
   | "tool_call_function_arguments_invalid";
 
+type InvalidToolCallField =
+  | "tool_calls"
+  | "tool_call"
+  | "id"
+  | "function"
+  | "function.name"
+  | "function.arguments";
+
 /**
  * Explain only the rejected wire shape, never its values. This diagnostic exists so provider
  * compatibility can be tightened from evidence without retaining tool arguments or credentials.
@@ -221,15 +229,20 @@ type InvalidToolCallReason =
 function diagnoseInvalidToolCalls(
   rawToolCalls: unknown,
   mode: "stream" | "response",
-): { reason: InvalidToolCallReason; callIndex?: number; valueType: string } | undefined {
+): { reason: InvalidToolCallReason; field: InvalidToolCallField; callIndex?: number; valueType: string } | undefined {
   if (!Array.isArray(rawToolCalls)) {
-    return { reason: "tool_calls_not_array", valueType: rawToolCalls === null ? "null" : typeof rawToolCalls };
+    return {
+      reason: "tool_calls_not_array",
+      field: "tool_calls",
+      valueType: rawToolCalls === null ? "null" : typeof rawToolCalls,
+    };
   }
   for (let callIndex = 0; callIndex < rawToolCalls.length; callIndex++) {
     const rawToolCall = rawToolCalls[callIndex];
     if (!isRecord(rawToolCall)) {
       return {
         reason: "tool_call_not_object",
+        field: "tool_call",
         callIndex,
         valueType: rawToolCall === null ? "null" : Array.isArray(rawToolCall) ? "array" : typeof rawToolCall,
       };
@@ -245,19 +258,30 @@ function diagnoseInvalidToolCalls(
         if (!isRecord(streamFunction)) {
           return {
             reason: "tool_call_function_not_object",
+            field: "function",
             callIndex,
             valueType: Array.isArray(streamFunction) ? "array" : typeof streamFunction,
           };
         }
         if (streamFunction.name !== undefined && typeof streamFunction.name !== "string") {
-          return { reason: "tool_call_function_name_invalid", callIndex, valueType: typeof streamFunction.name };
+          return {
+            reason: "tool_call_function_name_invalid",
+            field: "function.name",
+            callIndex,
+            valueType: typeof streamFunction.name,
+          };
         }
         if (streamFunction.arguments !== undefined && typeof streamFunction.arguments !== "string") {
-          return { reason: "tool_call_function_arguments_invalid", callIndex, valueType: typeof streamFunction.arguments };
+          return {
+            reason: "tool_call_function_arguments_invalid",
+            field: "function.arguments",
+            callIndex,
+            valueType: typeof streamFunction.arguments,
+          };
         }
       }
       if (rawToolCall.id !== undefined && typeof rawToolCall.id !== "string") {
-        return { reason: "tool_call_id_invalid", callIndex, valueType: typeof rawToolCall.id };
+        return { reason: "tool_call_id_invalid", field: "id", callIndex, valueType: typeof rawToolCall.id };
       }
       continue;
     }
@@ -269,24 +293,35 @@ function diagnoseInvalidToolCalls(
     if (!isRecord(rawToolCall.function)) {
       return {
         reason: "tool_call_function_not_object",
+        field: "function",
         callIndex,
         valueType: rawToolCall.function === null ? "null" : Array.isArray(rawToolCall.function) ? "array" : typeof rawToolCall.function,
       };
     }
     if (typeof rawToolCall.id !== "string") {
-      return { reason: "tool_call_id_invalid", callIndex, valueType: typeof rawToolCall.id };
+      return { reason: "tool_call_id_invalid", field: "id", callIndex, valueType: typeof rawToolCall.id };
     }
     if (typeof rawToolCall.function.name !== "string") {
-      return { reason: "tool_call_function_name_invalid", callIndex, valueType: typeof rawToolCall.function.name };
+      return {
+        reason: "tool_call_function_name_invalid",
+        field: "function.name",
+        callIndex,
+        valueType: typeof rawToolCall.function.name,
+      };
     }
     if (typeof rawToolCall.function.arguments !== "string") {
-      return { reason: "tool_call_function_arguments_invalid", callIndex, valueType: typeof rawToolCall.function.arguments };
+      return {
+        reason: "tool_call_function_arguments_invalid",
+        field: "function.arguments",
+        callIndex,
+        valueType: typeof rawToolCall.function.arguments,
+      };
     }
     // Last, matching the validator: #1531 also rejects a blank or whitespace-only name here,
     // because such a call cannot select a dispatch target. Reporting it as `name_invalid`
     // would claim a type problem for a correctly-typed value, so it gets its own code.
     if (rawToolCall.function.name.trim().length === 0) {
-      return { reason: "tool_call_function_name_blank", callIndex, valueType: "string" };
+      return { reason: "tool_call_function_name_blank", field: "function.name", callIndex, valueType: "string" };
     }
   }
   return undefined;
@@ -867,6 +902,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
       if (parsed.options.stopSequences !== undefined) body.stop = parsed.options.stopSequences;
       const reasoningDisabled = modelInList(provider.noReasoningModels, parsed.modelId);
+      const reasoningResolution = resolveReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
       const reasoningEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
       const nativeOpenAI = isNativeOpenAIChatTarget(provider);
       let reasoningLog: AdapterRequest["reasoningLog"];
@@ -886,6 +922,15 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             wireValue: false,
           };
         }
+      } else if (!reasoningDisabled && reasoningResolution?.wireOmitted === true) {
+        // TokenRouter's free Qwen route uses the provider-default xhigh tier when
+        // reasoning_effort is omitted. Keep the omission explicit in diagnostics
+        // so usage records do not mislabel it as a literal upstream xhigh value.
+        reasoningLog = {
+          effectiveEffort: reasoningResolution.effectiveEffort,
+          wireField: "reasoning_effort",
+          wireOmitted: true,
+        };
       } else if (reasoningEffort !== undefined) {
         if (provider.reasoningWireFormat === "gateway-object") {
           if (nativeOpenAI) {

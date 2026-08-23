@@ -176,6 +176,7 @@ describe("openai-chat non-stream response hardening", () => {
     expect(lines).toContain("[ocx:openai-chat:invalid-tool-calls]");
     expect(lines).toContain('"mode":"response"');
     expect(lines).toContain('"reason":"tool_call_function_arguments_invalid"');
+    expect(lines).toContain('"field":"function.arguments"');
     expect(lines).toContain('"valueType":"object"');
     expect(lines).not.toContain(secretArguments);
     expect(lines).not.toContain("call_1");
@@ -327,10 +328,35 @@ describe("openai-chat stream response hardening", () => {
     const lines = getDebugLogEntries().map(entry => entry.line).join("\n");
     expect(lines).toContain('"mode":"stream"');
     expect(lines).toContain('"reason":"tool_call_not_object"');
+    expect(lines).toContain('"field":"tool_call"');
     expect(lines).toContain('"callIndex":1');
     expect(lines).toContain('"valueType":"null"');
     expect(lines).not.toContain(privateName);
     expect(lines).not.toContain("private arguments");
+  });
+
+  test("debug mode identifies a nested streaming field without retaining its value", async () => {
+    process.env.OCX_DEBUG = "1";
+    const privateArguments = "private-stream-arguments";
+    const response = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{
+        id: "private-call-id",
+        function: { name: "private-tool-name", arguments: { privateArguments } },
+      }] } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(createOpenAIChatAdapter(provider()).parseStream(response));
+    expect(events).toEqual([{ type: "error", message: "upstream response contained invalid tool calls" }]);
+    const lines = getDebugLogEntries().map(entry => entry.line).join("\n");
+    expect(lines).toContain('"mode":"stream"');
+    expect(lines).toContain('"reason":"tool_call_function_arguments_invalid"');
+    expect(lines).toContain('"field":"function.arguments"');
+    expect(lines).toContain('"callIndex":0');
+    expect(lines).toContain('"valueType":"object"');
+    expect(lines).not.toContain(privateArguments);
+    expect(lines).not.toContain("private-call-id");
+    expect(lines).not.toContain("private-tool-name");
   });
 });
 

@@ -63,7 +63,9 @@ export interface AdapterRequest {
       | {
           effectiveEffort: string;
           wireField: "reasoning_effort" | "reasoning.effort" | "thinking.type";
-          wireValue: string;
+          wireValue?: string;
+          /** True when the named upstream field is intentionally omitted. */
+          wireOmitted?: boolean;
         };
     usageLog?: {
       inputTokens?: number;
