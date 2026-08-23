@@ -58,6 +58,14 @@ export interface ProviderFetchOptions {
   pacingSlotAcquired?: boolean;
 }
 
+/**
+ * Local reliability policy: once an upstream WebSocket has opened, a terminal-less
+ * close cannot be replayed safely because the turn may already have started.
+ * Keep the adapter available for direct tests and a future explicit re-evaluation,
+ * but route production Codex turns through the ordinary HTTP/SSE transport.
+ */
+export const CODEX_WS_UPSTREAM_ENABLED = false;
+
 export function providerFetch(
   provider: OcxProviderConfig,
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
@@ -72,11 +80,10 @@ export function providerFetch(
       base(input, { ...withUpstreamHttpVersion(input, init, provider), timeout: 0 }),
     { preconnect },
   ) as typeof globalThis.fetch;
-  // ChatGPT Codex backend: streaming turns ride the responses_websockets
-  // transport (measured ~3s faster TTFT than the SSE POST queue); everything
-  // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
+  // Canonical ChatGPT forwarding is pinned to HTTP/SSE by the reliability policy
+  // above. The guarded WS branch stays intact for reversible future evaluation.
   const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-    if (typeof input === "string" && init && shouldUseCodexWsUpstream(input, init, runtime)) {
+    if (CODEX_WS_UPSTREAM_ENABLED && typeof input === "string" && init && shouldUseCodexWsUpstream(input, init, runtime)) {
       // The fallback has to be the same HTTP fetch the non-WS branch would have
       // used, protocol pin included: a WS turn that falls back is serving the
       // request over HTTP, and dropping the provider's `upstreamHttpVersion`
