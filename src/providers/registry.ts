@@ -1007,6 +1007,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Unknown/new live models deliberately do not advertise a reasoning picker.
     reasoningEfforts: [],
     modelReasoningEfforts: COMMAND_CODE_MODEL_REASONING_EFFORTS,
+    modelDefaultReasoningEfforts: {
+      "meta/muse-spark-1.1": "medium",
+      "meta/muse-spark-1.2": "medium",
+      "meta/muse-spark-1.2-contributor": "medium",
+    },
     defaultMaxOutputTokens: 64_000,
     // The proprietary generate wire has no verified per-request serialization flag.
     parallelToolCalls: false,
@@ -1667,6 +1672,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     apiKeyValidation: "unknown",
     // The public catalog reports ids/context windows only; no trustworthy reasoning contract.
     reasoningEfforts: [],
+    modelReasoningEfforts: COMMAND_CODE_MODEL_REASONING_EFFORTS,
+    modelDefaultReasoningEfforts: {
+      "meta/muse-spark-1.1": "medium",
+      "meta/muse-spark-1.2": "medium",
+      "meta/muse-spark-1.2-contributor": "medium",
+    },
     modelDiscovery: {
       path: "models",
       maxResponseBytes: 256 * 1024,

@@ -1,6 +1,18 @@
 import { readBoundedResponseBody } from "../lib/bounded-body";
 
 const COMMAND_CODE_MODEL_EFFORTS = {
+  "meta/muse-spark-1.1": {
+    efforts: ["low", "medium", "high", "max"],
+    profileUrl: "https://commandcode.ai/models/muse-spark-1-1",
+  },
+  "meta/muse-spark-1.2": {
+    efforts: ["low", "medium", "high", "max"],
+    profileUrl: "https://commandcode.ai/models/muse-spark-1-2",
+  },
+  "meta/muse-spark-1.2-contributor": {
+    efforts: ["low", "medium", "high", "max"],
+    profileUrl: "https://commandcode.ai/models/muse-spark-1-2-contributor",
+  },
   "deepseek/deepseek-v4-pro": {
     efforts: ["high", "max"],
     profileUrl: "https://commandcode.ai/models/deepseek-v4-pro",

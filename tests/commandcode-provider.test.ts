@@ -68,6 +68,12 @@ describe("Command Code provider", () => {
       defaultModel: "deepseek/deepseek-v4-flash",
       apiKeyValidation: "unknown",
       reasoningEfforts: [],
+      modelReasoningEfforts: expect.objectContaining({
+        "meta/muse-spark-1.2-contributor": ["low", "medium", "high", "max"],
+      }),
+      modelDefaultReasoningEfforts: expect.objectContaining({
+        "meta/muse-spark-1.2-contributor": "medium",
+      }),
       modelDiscovery: {
         path: "models",
         maxResponseBytes: 256 * 1024,
@@ -168,6 +174,33 @@ describe("Command Code provider", () => {
     expect(request.headers.Authorization).toBe("Bearer cmd-test-key");
     expect(body.model).toBe("deepseek/deepseek-v4-flash");
     expect(body).not.toHaveProperty("parallel_tool_calls");
+  });
+
+  test("advertises and forwards every verified Muse Spark effort", () => {
+    const museEfforts = ["low", "medium", "high", "max"];
+    const provider = {
+      ...commandcodeConfig().providers.commandcode!,
+      modelReasoningEfforts: { "meta/muse-spark-1.2-contributor": museEfforts },
+      modelDefaultReasoningEfforts: { "meta/muse-spark-1.2-contributor": "medium" },
+    };
+    const route = routeModel(
+      {
+        ...commandcodeConfig(),
+        providers: { commandcode: provider },
+      },
+      "commandcode/meta/muse-spark-1.2-contributor",
+    );
+
+    for (const effort of museEfforts as Array<"low" | "medium" | "high" | "max">) {
+      const request = createOpenAIChatAdapter(route.provider).buildRequest({
+        modelId: route.modelId,
+        context: { messages: [{ role: "user", content: "ping", timestamp: 0 }] },
+        stream: false,
+        options: { reasoning: effort },
+      });
+      const body = JSON.parse(String(request.body)) as Record<string, unknown>;
+      expect(body.reasoning_effort).toBe(effort);
+    }
   });
 
   test("discovers the live catalog with context windows and preserves slash ids", async () => {
