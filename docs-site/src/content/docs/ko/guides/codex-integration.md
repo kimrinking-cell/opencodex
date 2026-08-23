@@ -183,6 +183,37 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 
 `ocx status`는 proxy가 실행 중인지 보여주고, 실행 중이 아닐 때는 같은 restart 힌트를 출력합니다. `ocx doctor`는 restart safety(service/shim coverage)를 보고합니다.
 
+### HTTP 200이지만 Codex가 완료되지 않는 경우
+
+HTTP `200`은 transport layer가 응답을 반환했다는 뜻일 뿐입니다. Codex가 사용 가능한 완료된
+turn을 받았다는 뜻은 **아닙니다**. 다음 신호가 하나 이상이면 요청을 미완료 또는 실패로
+취급하세요.
+
+- assistant message가 없거나 consumer가 볼 content가 비어 있음(`last-agent-message`도 없음);
+- usage의 `outputTokens=0`, 또는 해당 필드를 제공하는 경우 `firstOutputMs=null`;
+- terminal/completed event(예: `response.completed`)가 없거나 Codex가 이를 소비하기 전에 stream이 끝남;
+- 바깥 HTTP status는 `200`이어도 body 또는 SSE data frame 안에 inline `error` envelope가 있음.
+
+이 문제는 성공한 요청이 아니라 계층별 실패로 진단하세요.
+
+1. **비식별화한** status와 event shape를 수집합니다. HTTP status/content type, event type 순서,
+   terminal status, usage counter, 가능한 경우 `firstOutputMs` 같은 timing field만 남기세요. 공유하기
+   전에 authorization header, API key, OAuth/session token, cookie, account identifier, request/response
+   content를 제거합니다.
+2. 실패한 계층을 분리합니다. 먼저 provider/upstream status와 terminal event를 확인하고, 다음으로
+   OpenCodex proxy/bridge 변환, 마지막으로 Codex client timeout과 consumer 상태(`last-agent-message`
+   발생 여부 포함)를 확인하세요. `/healthz`가 정상이어도, 어느 한 계층의 HTTP `200`이어도 다음
+   계층이 turn을 완료했다는 증거는 아닙니다.
+3. 현재 request contract가 해당 작업을 idempotent하고 retryable하다고 정한 경우에만 재시도합니다.
+   transport가 `200`을 반환했다는 이유만으로 tool call이나 side effect가 있는 요청을 무작정
+   재생하지 말고 request의 idempotency와 timeout semantics를 유지하세요.
+
+증거가 proxy lifecycle 또는 configuration 상태를 가리키면, 되돌릴 수 있는 복원 절차는
+[네이티브 Codex 복원](#네이티브-codex-복원)에서 확인하고 명령 의미는 [CLI lifecycle reference](/reference/cli/lifecycle/)
+및 [`ocx stop`](/reference/cli/lifecycle/#ocx-stop), [`ocx restart`](/reference/cli/lifecycle/#ocx-restart)에서
+확인하세요. consumer가 사용 가능한 assistant content와 terminal/completed event를 받을 때까지
+HTTP `200`을 Codex 성공으로 보고하지 마세요.
+
 ## 서브에이전트 선택기
 
 catalog sync는 선택된 서브에이전트 모델을 Codex가 쓸 수 있게 합니다. picker 순서는 [Codex App model picker](/guides/codex-app-models/#subagent-selection)에서, v1/base/v2 위임과 fallback 동작은 [Sub-agent Surface](/guides/sub-agent-surface/)에서 확인하세요.

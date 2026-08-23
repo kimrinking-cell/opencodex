@@ -298,6 +298,40 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 `ocx status` shows whether the proxy is running and prints the same restart hint when
 it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
+### HTTP 200 but no Codex completion
+
+An HTTP `200` only proves that a transport layer returned a response. It does **not** prove that
+Codex received a usable, completed turn. Treat the request as incomplete or failed when one or more
+of these signals is present:
+
+- the assistant message is missing or has empty consumer-visible content (including no
+  `last-agent-message`);
+- usage reports `outputTokens=0`, or `firstOutputMs=null` when that field is available;
+- the stream has no terminal/completed event (for example, no `response.completed`), or ends before
+  Codex can consume one; or
+- the body or an SSE data frame contains an inline `error` envelope even though the outer HTTP status
+  is `200`.
+
+Diagnose this as a layered failure, not as a successful request:
+
+1. Capture a **sanitized** status and event shape: the HTTP status/content type, event-type sequence,
+   terminal status, usage counters, and available timing fields such as `firstOutputMs`. Remove
+   authorization headers, API keys, OAuth/session tokens, cookies, account identifiers, and request
+   or response content before sharing it.
+2. Separate the layer that failed. Check the provider/upstream status and terminal event, then the
+   OpenCodex proxy/bridge translation, and finally the Codex client timeout and consumer state
+   (including whether the last agent message was emitted). A healthy `/healthz` or an HTTP `200`
+   from any one layer is not proof that the next layer completed the turn.
+3. Retry only when the current request contract says the operation is idempotent and retryable. Do
+   not blindly replay tool calls or other side-effecting requests just because the transport returned
+   `200`; preserve the request's idempotency and timeout semantics.
+
+If the evidence points to proxy lifecycle or configuration state, use [Restoring native Codex](#restoring-native-codex)
+for the reversible restore path and the [CLI lifecycle reference](/reference/cli/lifecycle/), including
+[`ocx stop`](/reference/cli/lifecycle/#ocx-stop) and [`ocx restart`](/reference/cli/lifecycle/#ocx-restart),
+for the command semantics. Do not report HTTP `200` as Codex success until the consumer has usable
+assistant content and a terminal/completed event.
+
 ## The subagent picker
 
 Catalog sync makes the selected sub-agent models available to Codex; see [Codex App model picker](/guides/codex-app-models/#subagent-selection) for picker ordering and [Sub-agent Surface](/guides/sub-agent-surface/) for v1/base/v2 delegation and fallback behavior.
