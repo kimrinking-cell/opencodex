@@ -72,9 +72,10 @@ describe("antigravity CCA envelope", () => {
     expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
   });
 
-  test("exposes only Gemini 3.6 Flash tiers while hidden compatibility aliases resolve to them", async () => {
+  test("exposes collapsed Gemini Flash tiers while hidden compatibility aliases resolve to them", async () => {
     // Collapsed picker: base models only.
     expect(ANTIGRAVITY_MODELS).toEqual([
+      "gemini-3.7-flash",
       "gemini-3.6-flash",
       "gemini-3.1-pro",
       "gemini-3.1-flash-image",
@@ -83,6 +84,9 @@ describe("antigravity CCA envelope", () => {
       "gpt-oss-120b-medium",
     ]);
     for (const hidden of [
+      "gemini-3.7-flash-low",
+      "gemini-3.7-flash-medium",
+      "gemini-3.7-flash-high",
       "gemini-3.6-flash-low",
       "gemini-3.6-flash-medium",
       "gemini-3.6-flash-high",
@@ -113,7 +117,8 @@ describe("antigravity CCA envelope", () => {
       expect(JSON.parse(req.body).model).toBe(wire);
     }
 
-    for (const modelId of ["gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high"]) {
+    for (const modelId of ["gemini-3.7-flash-low", "gemini-3.7-flash-medium", "gemini-3.7-flash-high",
+      "gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high"]) {
       const req = await createGoogleAdapter(provider).buildRequest(parsed("x", false, modelId));
       expect(JSON.parse(req.body).model).toBe(modelId);
     }
@@ -130,6 +135,11 @@ describe("antigravity CCA envelope", () => {
       "gemini-3.6-flash-medium",
       "gemini-3.6-flash-high",
     ]))?.map(model => model.id)).toEqual(["gemini-3.6-flash"]);
+    expect(parseAntigravityAvailableModels(payload([
+      "gemini-3.7-flash-low",
+      "gemini-3.7-flash-medium",
+      "gemini-3.7-flash-high",
+    ]))?.map(model => model.id)).toEqual(["gemini-3.7-flash"]);
     expect(parseAntigravityAvailableModels(payload([
       "gemini-3.6-flash-low",
       "gemini-3.6-flash-high",
@@ -345,6 +355,20 @@ describe("antigravity CCA envelope", () => {
     const env = JSON.parse(req.body);
     expect(env.model).toBe("gemini-3.6-flash-high");
     expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
+  });
+
+  test("gemini-3.7-flash with effort=high routes to gemini-3.7-flash-high + thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.7-flash", "high"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.7-flash-high");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
+  });
+
+  test("gemini-3.7-flash with no effort defaults to medium wire ID, no thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.7-flash"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.7-flash-medium");
+    expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
   });
 
   test("gemini-3.1-pro with effort=low routes to gemini-3.1-pro-low + thinkingConfig", async () => {
@@ -603,6 +627,7 @@ describe("canonicalAntigravityUsageModel", () => {
   test("maps wire/compat ids to picker bases", () => {
     expect(canonicalAntigravityUsageModel("gemini-3.5-flash-mid")).toBe("gemini-3.6-flash");
     expect(canonicalAntigravityUsageModel("gemini-3.6-flash-high")).toBe("gemini-3.6-flash");
+    expect(canonicalAntigravityUsageModel("gemini-3.7-flash-medium")).toBe("gemini-3.7-flash");
     expect(canonicalAntigravityUsageModel("gemini-pro-agent")).toBe("gemini-3.1-pro");
     expect(canonicalAntigravityUsageModel("gemini-3.1-pro-low")).toBe("gemini-3.1-pro");
     expect(canonicalAntigravityUsageModel("claude-opus-4-6-thinking")).toBe("claude-opus-4-6-thinking");

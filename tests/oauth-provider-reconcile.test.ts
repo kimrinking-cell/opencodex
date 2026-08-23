@@ -50,6 +50,7 @@ describe("OAuth provider reconciliation", () => {
     const provider = config.providers["google-antigravity"];
     expect(provider.defaultModel).toBe("gemini-3.6-flash");
     expect(provider.models).toEqual([
+      "gemini-3.7-flash",
       "gemini-3.6-flash",
       "gemini-3.1-pro",
       "gemini-3.1-flash-image",
@@ -58,6 +59,7 @@ describe("OAuth provider reconciliation", () => {
       "gpt-oss-120b-medium",
     ]);
     expect(provider.models).not.toContain("gemini-3.5-flash-low");
+    expect(provider.models).not.toContain("gemini-3.7-flash-low");
     expect(provider.models).not.toContain("gemini-3.6-flash-low");
     expect(provider.models).not.toContain("gemini-3.6-flash-medium");
     expect(provider.models).not.toContain("gemini-3.6-flash-high");
@@ -78,6 +80,8 @@ describe("OAuth provider reconciliation", () => {
   });
 
   test("migrates the version-1 canonical Antigravity static row to live discovery", () => {
+    // The v1 canonical seed is the frozen six-model row older builds persisted; the live
+    // preset has moved on (gemini-3.7-flash), so clone the v1 shape instead of the preset.
     const config = {
       port: 10100,
       defaultProvider: "google-antigravity",
@@ -85,6 +89,15 @@ describe("OAuth provider reconciliation", () => {
       providers: {
         "google-antigravity": {
           ...structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+          defaultModel: "gemini-3.6-flash",
+          models: [
+            "gemini-3.6-flash",
+            "gemini-3.1-pro",
+            "gemini-3.1-flash-image",
+            "claude-sonnet-4-6",
+            "claude-opus-4-6-thinking",
+            "gpt-oss-120b-medium",
+          ],
           liveModels: false,
         },
       },
@@ -96,7 +109,7 @@ describe("OAuth provider reconciliation", () => {
 
     upsertOAuthProvider(config, "google-antigravity");
     expect(config.providers["google-antigravity"].liveModels).toBe(true);
-    expect(config.providers["google-antigravity"].models).toHaveLength(6);
+    expect(config.providers["google-antigravity"].models).toHaveLength(7);
   });
 
   test("preserves an explicit Antigravity static opt-out without the legacy migration marker", () => {

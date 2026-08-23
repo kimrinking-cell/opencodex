@@ -1764,6 +1764,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noReasoningModels: NVIDIA_NIM_KIMI_MODELS,
     modelReasoningEfforts: Object.fromEntries(NVIDIA_NIM_KIMI_MODELS.map(id => [id, []])),
     preserveReasoningContentModels: NVIDIA_NIM_KIMI_THINKING_MODELS,
+    modelContextWindows: {
+      "deepseek-ai/deepseek-v4-flash": 1_048_576,
+      "deepseek-ai/deepseek-v4-flash-0731": 1_048_576,
+      "deepseek-ai/deepseek-v4-pro": 1_048_576,
+      "z-ai/glm-5.2": 1_000_000,
+    },
     note: "Free tier on NVIDIA NIM — API key still required (get a free key at build.nvidia.com).",
   },
   { id: "venice", label: "Venice", baseUrl: "https://api.venice.ai/api/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://venice.ai/settings/api" },
@@ -2177,6 +2183,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
     modelReasoningEffortMap: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
     preserveReasoningContentModels: OPENCODE_FREE_DEEPSEEK_MODELS,
+    modelContextWindows: {
+      "deepseek-v4-flash-free": 200_000,
+    },
     // Same Zen roster behind the same base URL, so it carries the same measured
     // text-only list rather than only its DeepSeek member (#1043).
     noVisionModels: OPENCODE_ZEN_TEXT_ONLY_MODELS,

@@ -10,7 +10,13 @@ import { isValidModelDiscoveryModelId, MODEL_DISCOVERY_MAX_MODELS } from "./mode
 // returned wire id remains visible so an unavailable tier cannot be selected.
 
 // ── Wire IDs (what CCA :fetchAvailableModels returns) ──
+// The gemini-3.7-flash tier set is the announced 260813 lineup (Google blog/Antigravity);
+// CCA accounts still rolling out return only the 3.6 tiers until Google flips them on,
+// and live discovery keeps governing which rows are actually selectable.
 const ANTIGRAVITY_WIRE_MODELS = [
+  "gemini-3.7-flash-low",
+  "gemini-3.7-flash-medium",
+  "gemini-3.7-flash-high",
   "gemini-3.6-flash-low",
   "gemini-3.6-flash-medium",
   "gemini-3.6-flash-high",
@@ -23,6 +29,9 @@ const ANTIGRAVITY_WIRE_MODELS = [
 ];
 
 const ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID: Record<string, string> = {
+  "gemini-3.7-flash-low": "gemini-3.7-flash",
+  "gemini-3.7-flash-medium": "gemini-3.7-flash",
+  "gemini-3.7-flash-high": "gemini-3.7-flash",
   "gemini-3.6-flash-low": "gemini-3.6-flash",
   "gemini-3.6-flash-medium": "gemini-3.6-flash",
   "gemini-3.6-flash-high": "gemini-3.6-flash",
@@ -41,6 +50,7 @@ const ANTIGRAVITY_WIRE_IDS_BY_PICKER_MODEL: Record<string, string[]> = Object.en
 // Gemini models: effort → wire model suffix (official agy UI pattern).
 // Claude Opus: effort → thinkingConfig.thinkingLevel (CLIProxyAPI proven pattern).
 export const ANTIGRAVITY_MODEL_EFFORTS: Record<string, string[]> = {
+  "gemini-3.7-flash": ["low", "medium", "high"],
   "gemini-3.6-flash": ["low", "medium", "high"],
   "gemini-3.1-pro": ["low", "high"],
   "claude-sonnet-4-6": ["low", "medium", "high", "max"],
@@ -49,6 +59,11 @@ export const ANTIGRAVITY_MODEL_EFFORTS: Record<string, string[]> = {
 
 // ── Effort → wire model map for Gemini base models ──
 const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
+  "gemini-3.7-flash": {
+    low: "gemini-3.7-flash-low",
+    medium: "gemini-3.7-flash-medium",
+    high: "gemini-3.7-flash-high",
+  },
   "gemini-3.6-flash": {
     low: "gemini-3.6-flash-low",
     medium: "gemini-3.6-flash-medium",
@@ -62,6 +77,7 @@ const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
 
 // ── Default effort per Gemini base model ──
 const ANTIGRAVITY_DEFAULT_EFFORT: Record<string, string> = {
+  "gemini-3.7-flash": "medium",
   "gemini-3.6-flash": "medium",
   "gemini-3.1-pro": "high",
 };
@@ -102,6 +118,7 @@ export const ANTIGRAVITY_MODEL_ALIASES: Record<string, string> = {
 
 // Picker-visible: collapsed base models only.
 export const ANTIGRAVITY_MODELS = [
+  "gemini-3.7-flash",
   "gemini-3.6-flash",
   "gemini-3.1-pro",
   "gemini-3.1-flash-image",
@@ -112,6 +129,9 @@ export const ANTIGRAVITY_MODELS = [
 
 // Context windows from the upstream `:fetchAvailableModels` maxTokens per model.
 const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "gemini-3.7-flash-low": 1_048_576,
+  "gemini-3.7-flash-medium": 1_048_576,
+  "gemini-3.7-flash-high": 1_048_576,
   "gemini-3.6-flash-low": 1_048_576,
   "gemini-3.6-flash-medium": 1_048_576,
   "gemini-3.6-flash-high": 1_048_576,
@@ -125,6 +145,7 @@ const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Collapsed base IDs — explicit entries for the picker.
+  "gemini-3.7-flash": 1_048_576,
   "gemini-3.6-flash": 1_048_576,
   "gemini-3.1-pro": 1_048_576,
   // Wire IDs and aliases via derivation.
@@ -138,6 +159,7 @@ export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 };
 
 export const ANTIGRAVITY_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
+  "gemini-3.7-flash": ["text", "image"],
   "gemini-3.6-flash": ["text", "image"],
   "gemini-3.1-pro": ["text", "image"],
   "gemini-3.1-flash-image": ["text", "image"],
