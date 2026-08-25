@@ -2919,7 +2919,7 @@ async function handleResponsesInner(
         sourceIdentity = { providerName: resolvedSource.providerName, modelId: sourcePrefix };
       } catch { /* Native Codex helper calls remain OpenAI-owned without an enabled OpenAI route. */ }
       const targetRoute = resolveRoute(_sci.model);
-      if (shouldInterceptShadowCall(parsed.modelId, _sci.sourceModels, sourceIdentity, targetRoute)) {
+      if (shouldInterceptShadowCall(parsed.modelId, _sci.sourceModels, sourceIdentity, targetRoute, req.headers)) {
         const _sciOriginal = parsed.modelId;
         parsed.modelId = _sci.model;
         if (parsed._rawBody && typeof parsed._rawBody === "object") {
