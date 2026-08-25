@@ -249,6 +249,15 @@ explicit future re-evaluation or rollback. While this policy is active, every
 canonical forward turn follows the ordinary configured HTTP/SSE relay and
 heartbeat contract.
 
+`gpt-5.6-sol` canonical forward streams additionally use the existing bounded
+terminal-repair layer. Repeated live long-running turns on 2026-08-26 delivered
+complete assistant output items but closed before `response.completed`; at least one
+left the final answer in the rollout while Codex marked the turn failed. The repair may synthesize
+`response.completed` only when every opened output item has one structurally complete
+`output_item.done`; EOF with an open, malformed, duplicate, contradictory, or unknown
+graph remains `response.incomplete`. Other native OpenAI models keep the ordinary
+passthrough path until equivalent evidence exists.
+
 Translated response request-log tracking and the heartbeat relay also reuse
 `createSseInspector`. This keeps every client-facing SSE observation path on
 the same byte-bounded, discard-and-resynchronize frame policy and ensures the

@@ -55,8 +55,8 @@ function isCompleteItem(item: Record<string, unknown>): boolean {
 }
 
 /**
- * Relay a native Responses SSE body while repairing the narrow DeepSeek shape where every
- * output item is complete but the protocol terminal is missing or indefinitely delayed.
+ * Relay an opted-in native Responses SSE body while repairing the narrow shape where every
+ * output item is complete but the protocol terminal is missing, delayed, or omitted at EOF.
  */
 export function relayResponsesSseWithTerminalRepair(
   body: ReadableStream<Uint8Array>,

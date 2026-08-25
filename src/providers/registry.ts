@@ -999,6 +999,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     adapter: "openai-responses",
     baseUrl: "https://chatgpt.com/backend-api/codex",
     authKind: "forward",
+    // Repeated live Sol turns on 2026-08-26 delivered structurally complete output items and then
+    // closed without a Responses terminal. At least one had the final answer in its rollout, but
+    // the missing response.completed frame marked the UI turn failed. Reuse the bounded strict-graph
+    // repair already used by DeepSeek: only a fully closed output graph becomes completed;
+    // partial or contradictory graphs still fail closed as response.incomplete.
+    modelResponsesTerminalRepair: { "gpt-5.6-sol": { graceMs: 5_000 } },
     codexAccountMode: "pool",
     supportsServiceTier: true,
     featured: true,
