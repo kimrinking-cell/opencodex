@@ -1,9 +1,13 @@
 export interface AccountQuota {
   weeklyPercent?: number;
   fiveHourPercent?: number;
+  /** Codex WHAM sub-day window; only 18,000 seconds is rendered as the 5-hour limit. */
+  shortPercent?: number;
   monthlyPercent?: number;
   weeklyResetAt?: number;
   fiveHourResetAt?: number;
+  shortResetAt?: number;
+  shortWindowSeconds?: number;
   monthlyResetAt?: number;
   customWindows?: { label: string; percent: number; resetAt?: number }[];
   resetCredits?: number;
