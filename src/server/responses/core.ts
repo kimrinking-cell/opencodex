@@ -2419,6 +2419,7 @@ async function handleResponsesInner(
   if (_sci?.enabled && _sci.model && shouldInterceptShadowCall(
     parsed.modelId,
     _sci.sourceModels,
+    req.headers,
   )) {
     const _sciOriginal = parsed.modelId;
     parsed.modelId = _sci.model;

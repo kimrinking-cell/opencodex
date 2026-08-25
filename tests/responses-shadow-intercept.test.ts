@@ -59,19 +59,39 @@ describe("isShadowSourceModel", () => {
 });
 
 describe("shouldInterceptShadowCall", () => {
-  test("intercepts every shadow source model unconditionally (#1684)", () => {
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined)).toBe(true);
-    expect(shouldInterceptShadowCall("gpt-5.6-luna-2026-08", undefined)).toBe(true);
+  const metadata = (requestKind: string, threadSource?: string) => new Headers({
+    "x-codex-turn-metadata": JSON.stringify({
+      request_kind: requestKind,
+      ...(threadSource ? { thread_source: threadSource } : {}),
+    }),
+  });
+
+  test("preserves foreground Luna turns and intercepts explicit helpers", () => {
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("turn", "user"))).toBe(false);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("turn"))).toBe(false);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("turn", "title"))).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("turn", "ambient_suggestions"))).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("memory", "user"))).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("prewarm", "user"))).toBe(true);
   });
 
   test("does not intercept non-source models", () => {
-    expect(shouldInterceptShadowCall("gpt-5.6-terra", undefined)).toBe(false);
-    expect(shouldInterceptShadowCall("gpt-5.5", undefined)).toBe(false);
+    expect(shouldInterceptShadowCall("gpt-5.6-terra", undefined, new Headers())).toBe(false);
+    expect(shouldInterceptShadowCall("gpt-5.5", undefined, new Headers())).toBe(false);
   });
 
   test("respects configured sourceModels override", () => {
-    expect(shouldInterceptShadowCall("custom-helper-v2", ["custom-helper"])).toBe(true);
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", ["custom-helper"])).toBe(false);
+    expect(shouldInterceptShadowCall("custom-helper-v2", ["custom-helper"], new Headers())).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", ["custom-helper"], new Headers())).toBe(false);
+  });
+
+  test("retains legacy interception for absent or malformed metadata", () => {
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, new Headers())).toBe(true);
+    expect(shouldInterceptShadowCall(
+      "gpt-5.6-luna",
+      undefined,
+      new Headers({ "x-codex-turn-metadata": "{" }),
+    )).toBe(true);
   });
 });
 
@@ -114,10 +134,15 @@ async function post(
   model: string,
   requestKind?: string,
   logCtx: RequestLogContext = { model: "", provider: "" },
+  threadSource?: string,
+  effort = "high",
 ): Promise<Response> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (requestKind) {
-    headers["x-codex-turn-metadata"] = JSON.stringify({ request_kind: requestKind });
+    headers["x-codex-turn-metadata"] = JSON.stringify({
+      request_kind: requestKind,
+      ...(threadSource ? { thread_source: threadSource } : {}),
+    });
   }
   return handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
@@ -126,7 +151,7 @@ async function post(
       model,
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
       stream: false,
-      reasoning: { effort: "high" },
+      reasoning: { effort },
     }),
   }), config, logCtx);
 }
@@ -152,7 +177,7 @@ describe("shadow call intercept request path (issue #311)", () => {
     expect(effort).toBe("low");
   });
 
-  test("rewrites a gpt-5.6-luna turn request too (#1684)", async () => {
+  test("rewrites a feature-owned gpt-5.6-luna turn request (#1684)", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     const logCtx: RequestLogContext = { model: "", provider: "" };
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
@@ -163,11 +188,27 @@ describe("shadow call intercept request path (issue #311)", () => {
       }), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
 
-    await post(interceptConfig(), "gpt-5.6-luna", "turn", logCtx);
+    await post(interceptConfig(), "gpt-5.6-luna", "turn", logCtx, "title");
 
     expect(bodies.length).toBe(1);
     expect(String(bodies[0]?.model ?? "")).toContain("grok-4.5");
     expect(logCtx.shadowCallRewrittenFrom).toBe("gpt-5.6-luna");
+  });
+
+  test("does not rewrite a foreground gpt-5.6-luna turn or its max effort", async () => {
+    let sawFetch = false;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    globalThis.fetch = (async () => {
+      sawFetch = true;
+      return new Response(JSON.stringify({ error: { message: "unreachable" } }), { status: 500 });
+    }) as typeof fetch;
+
+    const response = await post(interceptConfig(), "gpt-5.6-luna", "turn", logCtx, "user", "max");
+
+    expect(sawFetch).toBe(false);
+    expect(response.status).toBe(404);
+    expect(logCtx.requestedEffort).toBe("max");
+    expect(logCtx.shadowCallRewrittenFrom).toBeUndefined();
   });
 
   // The intercept matches by PREFIX, so a caller can append anything and still be intercepted.
@@ -185,7 +226,7 @@ describe("shadow call intercept request path (issue #311)", () => {
     // A Google-shaped key: the runtime redactor has no rule for this family, and the newline
     // is stripped before redaction runs, so the old code persisted this string intact.
     const smuggled = "gpt-5.6-luna\nAIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6";
-    await post(interceptConfig(), smuggled, "turn", logCtx);
+    await post(interceptConfig(), smuggled, "turn", logCtx, "title");
 
     expect(logCtx.shadowCallRewrittenFrom).toBe("gpt-5.6-luna");
     expect(logCtx.shadowCallRewrittenFrom ?? "").not.toContain("AIza");
@@ -200,7 +241,7 @@ describe("shadow call intercept request path (issue #311)", () => {
 
     const config = interceptConfig();
     config.shadowCallIntercept = { enabled: true, model: "grok-4.5", sourceModels: ["gpt-5.4-mini"] };
-    await post(config, "gpt-5.4-mini-2024-07-18", "turn", logCtx);
+    await post(config, "gpt-5.4-mini-2024-07-18", "turn", logCtx, "title");
 
     expect(logCtx.shadowCallRewrittenFrom).toBe("gpt-5.4-mini");
   });
