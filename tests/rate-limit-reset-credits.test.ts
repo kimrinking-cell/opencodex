@@ -354,6 +354,28 @@ describe("rate-limit reset credits", () => {
         updatedAt: expect.any(Number),
       });
     });
+
+    it("maps a sub-day primary header to short quota and keeps secondary weekly", () => {
+      clearAccountQuota();
+      const headers = new Headers({
+        "x-codex-primary-used-percent": "82",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-at": "1787866698",
+        "x-codex-secondary-used-percent": "13",
+        "x-codex-secondary-window-minutes": "10080",
+        "x-codex-secondary-reset-at": "1788453498",
+      });
+      applyAccountQuotaFromUpstreamHeaders("short-and-weekly", headers);
+      expect(getAccountQuota("short-and-weekly")).toEqual({
+        shortPercent: 82,
+        shortResetAt: 1787866698,
+        shortWindowSeconds: 18000,
+        weeklyPercent: 13,
+        weeklyResetAt: 1788453498,
+        updatedAt: expect.any(Number),
+      });
+    });
+
     it("preserves resetCredits when applying header quota snapshots", () => {
       clearAccountQuota();
       updateAccountQuota("credits-A", 10, 111, 20, 222, 3);

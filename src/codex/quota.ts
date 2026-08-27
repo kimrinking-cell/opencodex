@@ -217,6 +217,20 @@ function isExplicitMonthlyWindowMinutes(windowMinutes: unknown): boolean {
     && minutes >= MONTHLY_WINDOW_MIN_MINUTES;
 }
 
+function explicitShortWindowSecondsFromMinutes(windowMinutes: unknown): number | undefined {
+  const minutes = typeof windowMinutes === "number"
+    ? windowMinutes
+    : typeof windowMinutes === "string" && windowMinutes.trim() !== ""
+      ? Number(windowMinutes)
+      : undefined;
+  return typeof minutes === "number"
+    && Number.isFinite(minutes)
+    && minutes > 0
+    && minutes < WEEKLY_WINDOW_MIN_SECONDS / 60
+    ? minutes * 60
+    : undefined;
+}
+
 
 function snapshotHasWeekly(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
   return quota.weeklyPercent !== undefined || quota.weeklyResetAt !== undefined;
@@ -323,6 +337,9 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
   const secondaryResetAt = normalizeResetAt(secondaryResetRaw);
   const tertiaryResetAt = normalizeResetAt(tertiaryResetRaw);
   const primaryIsMonthly = primaryRaw !== null && isExplicitMonthlyWindowMinutes(primaryWindowMinutes);
+  const primaryShortWindowSeconds = primaryRaw !== null
+    ? explicitShortWindowSecondsFromMinutes(primaryWindowMinutes)
+    : undefined;
 
   if (primaryIsMonthly) {
     if (primaryPercent !== undefined) {
@@ -332,6 +349,16 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
       // primary window, not a supplementary tertiary one. Not on the recovery path today,
       // but the two parsers must agree on what a bare monthlyPercent means.
       quota.monthlyIsPrimaryWindow = true;
+    }
+    if (secondaryPercent !== undefined) {
+      quota.weeklyPercent = secondaryPercent;
+      if (secondaryResetAt !== undefined) quota.weeklyResetAt = secondaryResetAt;
+    }
+  } else if (primaryShortWindowSeconds !== undefined) {
+    if (primaryPercent !== undefined) {
+      quota.shortPercent = primaryPercent;
+      if (primaryResetAt !== undefined) quota.shortResetAt = primaryResetAt;
+      quota.shortWindowSeconds = primaryShortWindowSeconds;
     }
     if (secondaryPercent !== undefined) {
       quota.weeklyPercent = secondaryPercent;
