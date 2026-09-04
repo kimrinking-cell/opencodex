@@ -623,9 +623,9 @@ describe("OpenAI provider-option integration spine", () => {
         removeTreeWithRetry(migrationRoot);
       }
 
-      expect(new Set(blockedUpstreamWebSocketUrls)).toEqual(new Set([
-        "wss://chatgpt.com/backend-api/codex/responses",
-      ]));
+      // The local reliability policy pins production Codex turns to HTTP/SSE,
+      // even when a provider advertises upstream WebSocket support.
+      expect(blockedUpstreamWebSocketUrls).toEqual([]);
       if (process.platform === "win32") {
         expect(aclSeamCalls).toBeGreaterThan(0);
         expect(principalSeamCalls).toBeGreaterThan(0);

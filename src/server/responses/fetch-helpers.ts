@@ -2,6 +2,7 @@ import type { Server } from "bun";
 import {
   codexWsUpstreamFetch,
   currentBunRuntimeIdentity,
+  isCanonicalCodexResponsesUrl,
   shouldUseCodexWsUpstream,
   type BunRuntimeGateInput,
 } from "./ws-upstream";
@@ -81,12 +82,13 @@ export function providerFetch(
     { preconnect },
   ) as typeof globalThis.fetch;
   // Canonical ChatGPT forwarding is pinned to HTTP/SSE by the reliability policy
-  // above. The guarded WS branch stays intact for reversible future evaluation.
+  // above. A separate operator opt-in for another Responses gateway remains valid.
   const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     const upstreamWebsocket = provider.upstreamWebsocket === true;
-    if (CODEX_WS_UPSTREAM_ENABLED && upstreamWebsocket
-      && typeof input === "string" && init
-      && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
+    const canonicalCodex = typeof input === "string" && isCanonicalCodexResponsesUrl(input);
+    const websocketEnabled = canonicalCodex ? CODEX_WS_UPSTREAM_ENABLED : upstreamWebsocket;
+    if (websocketEnabled && typeof input === "string" && init
+      && shouldUseCodexWsUpstream(input, init, runtime, canonicalCodex ? false : upstreamWebsocket)) {
       // The fallback has to be the same HTTP fetch the non-WS branch would have
       // used, protocol pin included: a WS turn that falls back is serving the
       // request over HTTP, and dropping the provider's `upstreamHttpVersion`

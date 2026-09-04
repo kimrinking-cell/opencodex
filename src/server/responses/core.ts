@@ -2925,6 +2925,18 @@ async function handleResponsesInner(
         if (parsed._rawBody && typeof parsed._rawBody === "object") {
           (parsed._rawBody as { model?: string }).model = _sci.model;
         }
+        // An explicit helper effort overrides the caller when valid. Malformed
+        // persisted values fail safe at low; an omitted setting preserves the
+        // caller's configured effort from the current upstream contract.
+        if (Object.hasOwn(_sci, "effort")) {
+          const shadowEffort = typeof _sci.effort === "string" && isCodexReasoningEffort(_sci.effort)
+            ? _sci.effort
+            : "low";
+          parsed.options.reasoning = shadowEffort;
+          if (parsed._rawBody && typeof parsed._rawBody === "object") {
+            (parsed._rawBody as Record<string, unknown>).reasoning = { effort: shadowEffort };
+          }
+        }
         // Record the operator-configured prefix that matched, NOT the caller's raw model string.
         // Matching is by prefix, so a caller can append arbitrary text and still intercept; that
         // raw value would then land in usage.jsonl and /api/logs behind a pattern-based redactor

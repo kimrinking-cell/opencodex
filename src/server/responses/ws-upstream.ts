@@ -19,6 +19,11 @@ const CODEX_RESPONSES_HTTP_URL = "https://chatgpt.com/backend-api/codex/response
 const CODEX_RESPONSES_WS_URL = "wss://chatgpt.com/backend-api/codex/responses";
 const WS_BETA = "responses_websockets=2026-02-06";
 
+/** Distinguish the reliability-pinned ChatGPT backend from operator-opted gateways. */
+export function isCanonicalCodexResponsesUrl(url: string): boolean {
+  return url === CODEX_RESPONSES_HTTP_URL;
+}
+
 /**
  * Dial URL for a request URL. The canonical ChatGPT backend keeps its constant;
  * an operator-opted OpenAI-compatible upstream swaps https for wss on the same
