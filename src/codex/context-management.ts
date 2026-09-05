@@ -10,11 +10,11 @@ import type { RawEntry } from "./catalog/parsing";
 import { trustedAccountBoundNativeCatalogSlug } from "./catalog/account-models";
 import upstreamModels from "./data/upstream-models.json";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
+import { contextFailureReportGuidance, REPORT_MODELS } from "./context-failure-report";
 
 /** Explicit native identities: a routed provider's GPT-shaped name is not eligible. */
-export const GPT_CONTEXT_MODELS: ReadonlySet<string> = new Set([
-  "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra",
-]);
+export const GPT_CONTEXT_MODELS: ReadonlySet<string> = new Set(REPORT_MODELS);
+export const LEGACY_CONTEXT_MODELS: ReadonlySet<string> = new Set(["gpt-5.6-luna", "gpt-5.6-terra"]);
 const CATALOG_MARKER = "opencodex_context_management_original";
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -40,6 +40,10 @@ export function gptContextManagementEnabled(config: Pick<OcxConfig, "gptContextM
     && isCanonicalOpenAiForwardProvider(provider);
 }
 
+export function contextSelfReportGuidance(model: string): string {
+  return contextFailureReportGuidance(model, join(getConfigDir(), "context-failure-reports"));
+}
+
 /** Use Codex's model defaults, not a global flag which also activates routed models. */
 export function applyGptContextManagement(models: RawEntry[], config: OcxConfig): void {
   const enabled = gptContextManagementEnabled(config);
@@ -49,17 +53,20 @@ export function applyGptContextManagement(models: RawEntry[], config: OcxConfig)
   if (enabled && !defaults) throw new Error("Pinned native context-management guidance is unavailable");
   restoreGptContextManagement(models);
   for (const row of models) {
-    const slug = trustedAccountBoundNativeCatalogSlug(row) ?? row.slug;
-    if (row.opencodex_catalog_kind && !trustedAccountBoundNativeCatalogSlug(row)) continue;
-    if (!enabled || typeof slug !== "string" || !GPT_CONTEXT_MODELS.has(slug)
-      || typeof row.slug !== "string" || (row.slug.includes("/") && !trustedAccountBoundNativeCatalogSlug(row))) continue;
+    const nativeSelector = trustedAccountBoundNativeCatalogSlug(row);
+    const slug = nativeSelector ?? row.slug;
+    if (row.opencodex_catalog_kind && !nativeSelector) continue;
+    if (!enabled || typeof slug !== "string" || (!GPT_CONTEXT_MODELS.has(slug) && !LEGACY_CONTEXT_MODELS.has(slug))
+      || typeof row.slug !== "string" || (row.slug.includes("/") && !nativeSelector)) continue;
     const own = row.model_messages && typeof row.model_messages === "object"
       ? row.model_messages as Record<string, unknown> : {};
     row[CATALOG_MARKER] = own.token_budget ?? null;
+    const experimental = GPT_CONTEXT_MODELS.has(slug);
     row.model_messages = { ...own, token_budget: {
       ...defaults,
-      enabled: true,
-      use_history_notes_extension: true,
+      enabled: experimental,
+      use_history_notes_extension: experimental,
+      ...(experimental ? { guidance_message: `${defaults!.guidance_message}\n\n${contextSelfReportGuidance(slug)}` } : {}),
     } };
   }
 }

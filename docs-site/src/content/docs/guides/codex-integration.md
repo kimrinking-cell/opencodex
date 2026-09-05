@@ -64,9 +64,9 @@ setting in memory and on disk and requests catalog convergence without restartin
 `GET /api/settings` reports it; `catalogRefreshPending` on the write reports deferred catalog work.
 
 Restart the proxy, run `ocx sync`, reload the Codex app-server, and start a new thread with
-Codex 0.153 or newer using ChatGPT authentication. Catalog sync enables native model defaults for
-`gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, and `gpt-6-astra`, including their native account
-selectors. Each model keeps its own instructions and reasoning settings. API-key models and
+Codex 0.153 or newer using ChatGPT authentication. Catalog sync enables the experimental stack for
+`gpt-5.6-sol` and `gpt-6-astra`, and explicitly disables it for `gpt-5.6-luna` and
+`gpt-5.6-terra` so they keep legacy compaction. This includes native account selectors. Each model keeps its own instructions and reasoning settings. API-key models and
 third-party provider routes are excluded, even if their names contain GPT.
 
 Leave Codex's global `features.context_management.experimental_mode` and `features.token_budget`
@@ -77,12 +77,29 @@ History and Notes v2 operations, including encrypted arguments and outputs.
 The first context-enabled model request binds the thread to its ChatGPT account. Notes, history,
 and subsequent model calls must use that account, including in Pool mode; quota exhaustion does
 not rotate an active context into another account. Restore the original account or start a new
-thread if it becomes unavailable. An active context also cannot switch to a third-party model;
-start a separate thread for that provider.
+thread if it becomes unavailable. An active experimental context cannot switch to Luna, Terra, or a third-party model;
+start a separate thread to use legacy compaction or another provider.
 
-Set the field to `false`, restart and sync to restore the previous model metadata for new
+Set the field to `false` through `/api/settings` and reload the app-server to restore the previous model metadata for new
 threads. Native restore (`ocx stop`) also removes this build's context metadata. No note contents
 or bearer tokens are stored in the proxy's persistent account bindings.
+
+Sol and Astra receive context guidance to report a missing checkpoint, a Notes/History error,
+or a lost goal or uncertain constraints after a bounded recovery attempt. The local shell
+reporter writes one JSON file per incident/outcome under
+`$OPENCODEX_HOME/context-failure-reports/` (default `~/.opencodex/context-failure-reports/`).
+Records contain time, model, opaque thread/window identifiers when available, reason, stage,
+and recovery outcome. They contain no user text or note contents, and identify themselves as
+`source: "model_self_report"`, `independently_verified: false`. Controlled tests set
+`simulation: true`; keep them separate from real incidents.
+
+When a recovery problem is recognized, the next user-facing reply and the final answer must
+include **컨텍스트 복구 문제 감지 — 복구 완료** (recovered) or
+**컨텍스트 복구 문제 감지 — 미해결** (unresolved), with a brief explanation. If the shell
+is unavailable or the report cannot be written, also show **자기보고 기록 저장 실패**.
+The reporter does not bypass the client's filesystem permissions. This is model-followed
+guidance, not an automatic fault detector: no report does not prove successful recovery, and
+self-reported recovery needs independent evidence before it is treated as verified.
 
 This remains experimental. Successful Notes/History requests do not guarantee that a model
 continues the original task after `new_context`; verify the resumed task before relying on it

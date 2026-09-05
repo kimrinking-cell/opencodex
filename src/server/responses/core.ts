@@ -173,7 +173,7 @@ import {
 import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import {
   bindContextAccount, contextSessionFromHeaders, gptContextManagementEnabled,
-  GPT_CONTEXT_MODELS, readContextAccountBinding,
+  GPT_CONTEXT_MODELS, readContextAccountBinding, contextSelfReportGuidance,
 } from "../../codex/context-management";
 import {
   computeQuotaCooldown,
@@ -3301,7 +3301,7 @@ async function handleResponsesInner(
   if (contextSessionId) {
     if (!gptContextManagementEnabled(config) || !GPT_CONTEXT_MODELS.has(route.modelId)
       || route.providerName !== "openai" || !isCanonicalOpenAiForwardProvider(route.provider)) {
-      return formatErrorResponse(409, "context_model_unsupported", "This context session requires native GPT Luna, Terra, Sol or Astra; use a new session for another provider");
+      return formatErrorResponse(409, "context_model_unsupported", "This experimental context requires native GPT Sol or Astra; start a new session for Luna, Terra or another provider");
     }
     try {
       const binding = readContextAccountBinding(contextSessionId);
@@ -3332,6 +3332,10 @@ async function handleResponsesInner(
         route.codexAccountId = authCtx.accountId;
       }
       if (binding.kind === "caller") route.codexAccountMode = "direct";
+      // Native 0.153 clients do not reliably send customized token-budget guidance.
+      // Carry the user-requested self-report policy on each eligible request, including
+      // the first request in a fresh window; legacy and routed models never reach here.
+      injectDeveloperMessage(parsed, contextSelfReportGuidance(route.modelId));
     } catch {
       releaseCodexAuthContextProbeLease(authCtx);
       return formatErrorResponse(409, "context_account_changed", "Context history belongs to a different account; restore it or start a new session");

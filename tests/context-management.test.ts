@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   applyGptContextManagement, bindContextAccount, contextSessionFromHeaders,
-  GPT_CONTEXT_MODELS, readContextAccountBinding, restoreGptContextManagement,
+  GPT_CONTEXT_MODELS, LEGACY_CONTEXT_MODELS, readContextAccountBinding, restoreGptContextManagement,
 } from "../src/codex/context-management";
 import { handleContextManagement, isContextManagementPath } from "../src/server/context-management";
 import { handleResponses } from "../src/server/responses";
@@ -50,7 +50,7 @@ afterEach(() => {
 const request = (operation = "alpha/history/v2/list_windows", body: unknown = { context: { session_id: "fixture-session", current_agent_name: "/root" }, limit: 1 }, h = headers()) =>
   new Request(`http://127.0.0.1/v1/${operation}`, { method: "POST", headers: h, body: JSON.stringify(body) });
 function bind(account = "fixture-account-a") {
-  return bindContextAccount("fixture-session", "gpt-5.6-luna", { kind: "main", accountId: null }, authHeaders(account));
+  return bindContextAccount("fixture-session", "gpt-5.6-sol", { kind: "main", accountId: null }, authHeaders(account));
 }
 
 function settings(body: unknown, deps: ManagementApiDeps) {
@@ -88,21 +88,32 @@ test("failed settings persistence restores the live context flag", async () => {
 });
 
 describe("native GPT catalog opt-in", () => {
-  test("all four native models and account selectors opt in; routed GPT names stay unchanged", () => {
-    const models: RawEntry[] = [...GPT_CONTEXT_MODELS].map(slug => ({ slug, model_messages: { instructions_template: `native-${slug}` }, supported_reasoning_levels: [{ effort: "high" }] }));
-    models.push({ slug: "account-a/gpt-5.6-terra", opencodex_catalog_kind: "account-selector-v1", model_messages: { instructions_template: "native-account" } });
+  test("Sol/Astra opt in with self-reporting; Luna/Terra remain legacy; routed names stay unchanged", () => {
+    const experimental = [...GPT_CONTEXT_MODELS];
+    const legacy = [...LEGACY_CONTEXT_MODELS];
+    const rows = [...experimental, ...legacy].flatMap(slug => [
+      { slug, experimental: experimental.includes(slug) },
+      { slug: `account-a/${slug}`, experimental: experimental.includes(slug), account: true },
+    ]);
+    const models: RawEntry[] = rows.map(row => ({ slug: row.slug,
+      ...(row.account ? { opencodex_catalog_kind: "account-selector-v1" } : {}),
+      model_messages: { instructions_template: `native-${row.slug}` },
+      supported_reasoning_levels: [{ effort: "high" }],
+    }));
     models.push({ slug: "cursor/gpt-5.6-sol", model_messages: { instructions_template: "routed" } });
     models.push({ slug: "gpt-6-astra", opencodex_catalog_kind: "custom-model-v1", model_messages: { instructions_template: "custom" } });
     models.push({ slug: "claude-fable-5-1", model_messages: { instructions_template: "claude" } });
     const original = structuredClone(models);
     applyGptContextManagement(models, config);
-    for (let i = 0; i < 5; i++) {
+    rows.forEach((row, i) => {
       const messages = models[i]!.model_messages as Record<string, any>;
-      expect(messages.token_budget.enabled).toBe(true);
-      expect(messages.token_budget.use_history_notes_extension).toBe(true);
+      expect(messages.token_budget.enabled).toBe(row.experimental);
+      expect(messages.token_budget.use_history_notes_extension).toBe(row.experimental);
+      expect(messages.token_budget.guidance_message.includes("context-failure-report.ts")).toBe(row.experimental);
+      if (row.experimental) expect(messages.token_budget.guidance_message).toContain("**컨텍스트 복구 문제 감지 — 미해결**");
       expect(messages.instructions_template).toBe((original[i]!.model_messages as Record<string, unknown>).instructions_template);
-    }
-    expect(models.slice(5)).toEqual(original.slice(5));
+    });
+    expect(models.slice(rows.length)).toEqual(original.slice(rows.length));
     const once = structuredClone(models);
     applyGptContextManagement(models, config);
     expect(models).toEqual(once);
@@ -200,14 +211,14 @@ test("pool relay resolves the original added or main account explicitly and chec
   for (const accountId of ["added-fixture", MAIN_CODEX_ACCOUNT_ID]) {
     const sessionId = `session-${accountId}`;
     const auth: CodexAuthContext = { kind: "main-pool", accountId, writerGeneration: 1, accessToken: "fixture", chatgptAccountId: "fixture-account-a" };
-    bindContextAccount(sessionId, "gpt-5.6-terra", auth, headers());
+    bindContextAccount(sessionId, "gpt-5.6-sol", auth, headers());
     let resolutions = 0;
     const response = await handleContextManagement(request(undefined, { context: { session_id: sessionId } }), config, undefined, {
       resolveAuth: async (_headers, _config, mode, options) => {
         resolutions++;
         expect(mode).toBe("pool");
         expect(options?.accountId).toBe(accountId);
-        expect(options?.modelId).toBe("gpt-5.6-terra");
+        expect(options?.modelId).toBe("gpt-5.6-sol");
         return auth;
       },
       materializeAuth: async () => headers(),
@@ -256,4 +267,33 @@ test("active context cannot switch into a routed provider", async () => {
   const result = await response.json();
   expect(result.error.code).toBe("context_model_unsupported");
   expect(response.status).toBe(409);
+});
+
+test("actual Responses wire carries self-report guidance only in active Sol/Astra contexts", async () => {
+  writeFileSync(join(isolatedCodexHome.path, "auth.json"), JSON.stringify({ tokens: { access_token: fakeChatGptJwt({ chatgpt_account_id: "fixture-account-a" }), refresh_token: "fixture-refresh", account_id: "fixture-account-a" } }));
+  const originalFetch = globalThis.fetch;
+  const captured: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.includes("/models")) return Response.json({ models: ["gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-luna", "gpt-5.6-terra"].map(slug => ({ slug, supported_in_api: true, visibility: "list" })) });
+    captured.push(typeof init?.body === "string" ? init.body : "");
+    return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  try {
+    for (const model of ["gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-luna", "gpt-5.6-terra"]) {
+      const experimental = GPT_CONTEXT_MODELS.has(model);
+      const h = headers();
+      if (experimental) h.set("x-codex-turn-metadata", JSON.stringify({ session_id: `fixture-${model}`, history_ingest_requested: true }));
+      const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", {
+        method: "POST", headers: h, body: JSON.stringify({ model, input: [{ role: "user", content: "fixture" }], stream: true }),
+      }), config, { model, provider: "openai" });
+      if (response.status !== 200) throw new Error(`${model}: ${await response.text()}`);
+      expect(response.status).toBe(200);
+      await response.text();
+      const wire = captured.at(-1)!;
+      expect(wire).toContain(model);
+      expect(wire.includes("context-failure-report.ts")).toBe(experimental);
+      expect(wire.includes("**컨텍스트 복구 문제 감지 — 복구 완료**")).toBe(experimental);
+    }
+  } finally { globalThis.fetch = originalFetch; }
 });
