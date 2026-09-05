@@ -308,6 +308,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
       // Absent means off (today's Design B injection), so the GUI/CLI render a plain switch.
       codexDesktopAuthless: config.codexDesktopAuthless === true,
+      gptContextManagement: config.gptContextManagement === true,
       startupHealth: await readStartupHealth(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
@@ -395,6 +396,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       oauthOpenBrowser?: unknown;
       showCodexSparkQuota?: unknown;
       codexDesktopAuthless?: unknown;
+      gptContextManagement?: unknown;
     };
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
@@ -402,8 +404,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.codexAccountPickerEnabled === undefined
       && body.oauthOpenBrowser === undefined
       && body.showCodexSparkQuota === undefined
-      && body.codexDesktopAuthless === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, oauthOpenBrowser, showCodexSparkQuota, or codexDesktopAuthless" }, 400);
+      && body.codexDesktopAuthless === undefined
+      && body.gptContextManagement === undefined) {
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, oauthOpenBrowser, showCodexSparkQuota, codexDesktopAuthless, or gptContextManagement" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -423,6 +426,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.codexDesktopAuthless !== undefined && typeof body.codexDesktopAuthless !== "boolean") {
       return jsonResponse({ error: "codexDesktopAuthless boolean is required" }, 400);
+    }
+    if (body.gptContextManagement !== undefined && typeof body.gptContextManagement !== "boolean") {
+      return jsonResponse({ error: "gptContextManagement boolean is required" }, 400);
     }
     if (body.appOwnedMemoryBudgetMb !== undefined && (
       typeof body.appOwnedMemoryBudgetMb !== "number"
@@ -449,6 +455,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasShowCodexSparkQuota: Object.hasOwn(config, "showCodexSparkQuota"),
       codexDesktopAuthless: config.codexDesktopAuthless,
       hasCodexDesktopAuthless: Object.hasOwn(config, "codexDesktopAuthless"),
+      gptContextManagement: config.gptContextManagement,
+      hasGptContextManagement: Object.hasOwn(config, "gptContextManagement"),
     };
     const pickerWasEnabled = codexAccountPickerEnabled(config);
     let pickerIsEnabled = pickerWasEnabled;
@@ -481,6 +489,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       }
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
+      if (typeof body.gptContextManagement === "boolean") config.gptContextManagement = body.gptContextManagement;
       pickerIsEnabled = codexAccountPickerEnabled(config);
       (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
     } catch (error) {
@@ -506,6 +515,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexDesktopAuthless) {
         config.codexDesktopAuthless = previousSettings.codexDesktopAuthless;
       } else deleteConfigTopLevelKey(config, "codexDesktopAuthless");
+      if (previousSettings.hasGptContextManagement) {
+        config.gptContextManagement = previousSettings.gptContextManagement;
+      } else deleteConfigTopLevelKey(config, "gptContextManagement");
       throw error;
     }
     if (typeof body.appOwnedMemoryBudgetMb === "number") {
@@ -516,6 +528,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // waiting for the next start; the injector re-reads config and rewrites the form.
     const authlessIsEnabled = config.codexDesktopAuthless === true;
     const catalogRefresh = pickerWasEnabled !== pickerIsEnabled || authlessWasEnabled !== authlessIsEnabled
+      || (previousSettings.gptContextManagement === true) !== (config.gptContextManagement === true)
       ? await convergeCodexCatalog()
       : undefined;
     const catalogRefreshPending = catalogRefresh
@@ -532,6 +545,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       catalogRefreshPending,
       showCodexSparkQuota: config.showCodexSparkQuota === true,
       codexDesktopAuthless: authlessIsEnabled,
+      gptContextManagement: config.gptContextManagement === true,
       startupHealth: await readStartupHealth(config),
     });
   }

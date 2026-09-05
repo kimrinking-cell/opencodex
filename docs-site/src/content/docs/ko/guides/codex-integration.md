@@ -3,6 +3,39 @@ title: Codex 통합
 description: opencodex가 Codex에 자신을 주입하고, 모델 카탈로그를 동기화하고, shim을 설치하고, 깔끔하게 복원하는 방식.
 ---
 
+## 네이티브 GPT 전용 실험적 컨텍스트 관리
+
+이 커스텀 빌드는 `$OPENCODEX_HOME/config.json`(기본 `~/.opencodex/config.json`)의
+최상위 설정 `"gptContextManagement": true`를 지원합니다. 기본값은 꺼짐입니다.
+기존 설정에 이 필드를 추가한 뒤 프록시 재시작, `ocx sync`, Codex app-server 재로딩을
+거쳐 새 대화를 시작합니다. ChatGPT 로그인과 Codex 0.153 이상이 필요합니다.
+
+이 빌드가 이미 실행 중이면 인증된 `PUT /api/settings`에
+`{"gptContextManagement": true}`를 보내 프록시 재시작 없이 저장·반영하고 카탈로그를
+동기화할 수 있습니다. 쓰기 결과의 `catalogRefreshPending`은 동기화 지연 여부입니다.
+
+적용 대상은 `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-6-astra` 및
+해당 모델의 네이티브 계정 선택 항목입니다. 각 모델의 기본 지침과 추론 설정은 유지합니다.
+API 키 모델과 다른 공급자를 거치는 GPT 모델은 적용 대상에서 제외합니다.
+
+모델별 적용을 위해 Codex의 전역 `features.context_management.experimental_mode`와
+`features.token_budget`는 지정하지 않습니다. 명시적인 전역 token-budget 설정은
+카탈로그 기본값보다 우선합니다. 기존 `/v1` 주소를 유지하며 네이티브 History/Notes v2의
+암호화된 인수와 결과를 그대로 중계합니다.
+
+첫 모델 요청에서 대화를 ChatGPT 계정에 고정합니다. Pool 모드에서도 이후 모델 요청,
+노트, 과거 기록은 같은 계정을 사용하며 할당량 소진 시 다른 계정으로 전환하지 않습니다.
+계정을 사용할 수 없으면 원래 계정을 복구하거나 새 대화를 시작해야 합니다.
+활성 컨텍스트에서 다른 공급자 모델로 바꾸려는 요청도 거부하므로 별도 대화를 사용합니다.
+
+`false`로 변경하고 재시작·동기화하면 새 대화에 적용되는 모델 메타데이터를 복원합니다.
+`ocx stop`으로 네이티브 설정을 복원할 때도 이 빌드가 추가한 메타데이터를 제거합니다.
+프록시의 계정 고정 파일에는 노트 내용이나 인증 토큰을 저장하지 않습니다.
+
+실험 기능이므로 API 성공만으로 `new_context` 이후 작업 재개를 보장하지 않습니다.
+무인 작업에 사용하기 전에 실제 재개 결과를 확인하고, 진행 중인 긴 대화는 중간에
+전환하지 마세요. [영문 설명](/guides/codex-integration/#experimental-context-management-for-native-gpt-models)도 참고하세요.
+
 opencodex는 Codex가 읽는 두 가지, 즉 설정(`$CODEX_HOME/config.toml`, 기본값 `~/.codex/config.toml`)과 모델 카탈로그를 편집해서 Codex가 프록시를 경유하게 합니다. 모든 편집은 멱등적이며 되돌릴 수 있습니다.
 
 프록시는 bare `openai` Codex 로그인 경로 하나와 Pool(기본) 및 Direct 계정 모드, 그리고 설정된 API 키용 `openai-apikey/<model>`을 제공합니다. Pool은 메인 계정과 추가된 계정을 포함하고, Direct는 호출자/메인 bearer만 사용합니다. 경로들은 서로 fallback하지 않습니다. shipped v1 config는 marker 2로 이관되며, 수동 복원을 위해 `config.json.pre-openai-tiers-v2.bak`를 보존합니다.

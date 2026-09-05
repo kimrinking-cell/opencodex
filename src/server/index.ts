@@ -191,6 +191,7 @@ import {
 import { handleImages } from "./images";
 import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
 import { handleSearch } from "./search";
+import { handleContextManagement, isContextManagementPath } from "./context-management";
 import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
 import {
   createManagementSessionControl,
@@ -811,6 +812,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     }
     if (path === "/v1/responses/compact") return req.method === "POST";
     if (path === "/v1/alpha/search") return req.method === "POST";
+    if (isContextManagementPath(path)) return req.method === "POST";
     if (path === "/v1/models") return req.method === "GET";
     // Realtime voice — a directly-spawned `codex app-server` needs these for desktop voice
     // the same way it needs /v1/responses. Two shapes, same trust model as /v1/responses:
@@ -1733,6 +1735,16 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             "x-content-type-options": "nosniff",
           },
         }), req, policy);
+      }
+
+      if (isContextManagementPath(url.pathname) && req.method === "POST") {
+        disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) return drainingResponse(req, policy);
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
+        return runAdmittedHttpTurn(req, policy, async lease =>
+          withCors(await handleContextManagement(req, config, lease), req, policy));
       }
 
       if (url.pathname === "/v1/alpha/search" && req.method === "POST") {

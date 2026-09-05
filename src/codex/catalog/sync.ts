@@ -74,6 +74,7 @@ import {
 import { codexRuntimeStatePath } from "../runtime";
 import { accountBoundNativeDisplayName, CODEX_ACCOUNT_BOUND_CATALOG_KIND, trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./account-models";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./native-models";
+import { applyGptContextManagement, restoreGptContextManagement } from "../context-management";
 
 export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
 
@@ -1751,6 +1752,7 @@ function writeRetainedCatalogSync({
   });
   clampCatalogModelsToCodexSupport(catalog.models);
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge);
+  applyGptContextManagement(catalog.models, config);
 
   const added = goEntries.length + accountBoundEntries.length;
   const content = `${JSON.stringify(catalog, null, 2)}\n`;
@@ -1939,6 +1941,7 @@ export function restoreCodexCatalogWithPermit(
       ...backup,
       models: [...backup.models, ...userNativeAdditions],
     };
+    restoreGptContextManagement(restored.models);
     replaceActiveCodexCatalog(permit, owningCodexHome, {
       path: catalogPath,
       content: `${JSON.stringify(restored, null, 2)}\n`,
@@ -1952,7 +1955,8 @@ export function restoreCodexCatalogWithPermit(
     disabledModels,
   );
   const removed = before - native.length;
-  if (removed > 0) {
+  const restoredContextMetadata = restoreGptContextManagement(native);
+  if (removed > 0 || restoredContextMetadata) {
     catalog.models = native;
     replaceActiveCodexCatalog(permit, owningCodexHome, {
       path: catalogPath,

@@ -49,6 +49,45 @@ The proxy listens on port `10100` by default and serves `POST /v1/responses`,
 `POST /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`,
 `GET /v1/models`, `GET /healthz`, and the `/api/*` management surface.
 
+### Experimental context management for native GPT models
+
+This custom build supports a default-off `gptContextManagement` setting in
+`$OPENCODEX_HOME/config.json` (default `~/.opencodex/config.json`). Merge this field into the
+existing configuration:
+
+```json
+{ "gptContextManagement": true }
+```
+
+Once this build is running, authenticated `PUT /api/settings` with the same JSON changes the
+setting in memory and on disk and requests catalog convergence without restarting the proxy.
+`GET /api/settings` reports it; `catalogRefreshPending` on the write reports deferred catalog work.
+
+Restart the proxy, run `ocx sync`, reload the Codex app-server, and start a new thread with
+Codex 0.153 or newer using ChatGPT authentication. Catalog sync enables native model defaults for
+`gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, and `gpt-6-astra`, including their native account
+selectors. Each model keeps its own instructions and reasoning settings. API-key models and
+third-party provider routes are excluded, even if their names contain GPT.
+
+Leave Codex's global `features.context_management.experimental_mode` and `features.token_budget`
+unset for this model-specific opt-in. An explicit global token-budget override takes precedence
+over the catalog defaults. The existing `/v1` base URL remains valid: the proxy relays the native
+History and Notes v2 operations, including encrypted arguments and outputs.
+
+The first context-enabled model request binds the thread to its ChatGPT account. Notes, history,
+and subsequent model calls must use that account, including in Pool mode; quota exhaustion does
+not rotate an active context into another account. Restore the original account or start a new
+thread if it becomes unavailable. An active context also cannot switch to a third-party model;
+start a separate thread for that provider.
+
+Set the field to `false`, restart and sync to restore the previous model metadata for new
+threads. Native restore (`ocx stop`) also removes this build's context metadata. No note contents
+or bearer tokens are stored in the proxy's persistent account bindings.
+
+This remains experimental. Successful Notes/History requests do not guarantee that a model
+continues the original task after `new_context`; verify the resumed task before relying on it
+for unattended work. Existing long threads should not be migrated mid-task.
+
 ### Built-in image generation (`image_gen`)
 
 Codex's built-in `image_gen` tool does not go through `/v1/responses` — the codex-rs extension
