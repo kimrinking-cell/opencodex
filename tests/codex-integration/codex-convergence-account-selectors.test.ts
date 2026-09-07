@@ -1252,12 +1252,15 @@ test("management convergence preserves the Sol/Astra context policy across refre
       expect(budget?.enabled).toBe(experimental);
       expect(budget?.use_history_notes_extension).toBe(experimental);
       expect(budget?.guidance_message.includes("context-failure-report.ts")).toBe(experimental);
+      expect(row?.supports_experimental_context).toBe(experimental);
     }
   }
   const disabled = (await convergeCatalog({ ...nextConfig, gptContextManagement: false })).models ?? [];
   for (const row of disabled) {
     expect(Object.hasOwn(row, "opencodex_context_management_original")).toBe(false);
+    expect(Object.hasOwn(row, "opencodex_context_management_original_supports_experimental_context")).toBe(false);
     expect((row.model_messages as any)?.token_budget?.enabled).not.toBe(true);
+    expect(row.supports_experimental_context).toBeUndefined();
     expect((row.model_messages as any)?.token_budget?.guidance_message ?? "").not.toContain("context-failure-report.ts");
   }
 });
