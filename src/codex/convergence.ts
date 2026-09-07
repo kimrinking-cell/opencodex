@@ -8,6 +8,7 @@ import { getAuthStorePath } from "../oauth/store";
 import type { OcxConfig } from "../types";
 import { captureCatalogAdmissionSnapshot } from "./catalog-admission";
 import { legacyCustomModelCatalogSlugs } from "./custom-model-catalog-migration";
+import { applyGptContextManagement } from "./context-management";
 import {
   type CatalogGatherPathKind,
   type CatalogSourceForGather,
@@ -386,6 +387,7 @@ function prepareCatalog(
       : null,
   );
   finalizeAutoReviewModelOverride(mergedModels, catalogModels);
+  applyGptContextManagement(mergedModels, config);
   catalog.models = mergedModels;
   return catalog;
 }
