@@ -607,6 +607,8 @@ export interface OcxConfig {
     /** Maximum in-memory ciphertext-to-assignment entries. Default: 200. */
     cacheEntries?: number;
   };
+  /** Opt in to native ChatGPT context management for Sol and Astra. */
+  gptContextManagement?: boolean;
   /**
    * Quota-reset detection and notification. Absent means off: no detection, no timer, no sink.
    *
