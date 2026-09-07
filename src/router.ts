@@ -132,7 +132,9 @@ export function knownModelIdsForProvider(
   }
   for (const cached of getStaleCached(provName) ?? []) ids.add(cached.id);
   for (const model of config?.customModels ?? []) {
-    if (model.provider === provName && model.modelId) ids.add(model.modelId);
+    if (model.provider !== provName || !model.modelId) continue;
+    const isEncodedAlias = [...ids].some(id => id.includes("/") && encodeRoutedModelId(id) === model.modelId);
+    if (!isEncodedAlias) ids.add(model.modelId);
   }
   return [...ids];
 }
