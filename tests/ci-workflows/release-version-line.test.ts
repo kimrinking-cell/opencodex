@@ -82,6 +82,11 @@ function tagPointsAtHead(tag: string): boolean {
   return head.ok && tagged.ok && head.out.length > 0 && head.out === tagged.out;
 }
 
+/** Local custom ports may keep the release version only when they descend from it. */
+function tagIsAncestorOfHead(tag: string): boolean {
+  return git(["merge-base", "--is-ancestor", tag, "HEAD"]).ok;
+}
+
 describe("release version line", () => {
   test("package.json carries a parseable SemVer version", () => {
     expect(inTreeVersion()).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
@@ -100,6 +105,13 @@ describe("release version line", () => {
 
     const ordering = compareReleaseTags("v" + version, highest!);
     if (ordering === 0) {
+      if (Bun.env.OPENCODEX_LOCAL_PORT_BUILD === "1") {
+        expect(
+          tagIsAncestorOfHead(highest!),
+          "local port version " + version + " must descend from release tag " + highest,
+        ).toBe(true);
+        return;
+      }
       // Legal only on the release commit that tag names.
       expect(
         tagPointsAtHead(highest!),
