@@ -10,6 +10,7 @@ import type { WsData } from "../ws-bridge";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
+import { CODEX_RESPONSES_HTTP_URL } from "./codex-ws-request";
 
 export { withUpstreamHttpVersion };
 
@@ -65,6 +66,14 @@ export interface ProviderFetchOptions {
   dispatchOverride?: (input: Parameters<typeof globalThis.fetch>[0], init: RequestInit, execute: typeof globalThis.fetch) => Promise<Response>;
 }
 
+/**
+ * Local reliability policy: once a canonical ChatGPT WebSocket has opened, a
+ * terminal-less close cannot be replayed safely because the turn may already
+ * have started. Keep operator-opted Responses gateways available, but route
+ * canonical ChatGPT turns through HTTP/SSE.
+ */
+export const CODEX_WS_UPSTREAM_ENABLED = false;
+
 export function providerFetch(
   provider: OcxProviderConfig,
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
@@ -84,12 +93,14 @@ export function providerFetch(
     },
     { preconnect },
   ) as typeof globalThis.fetch;
-  // ChatGPT Codex backend: streaming turns ride the responses_websockets
-  // transport (measured ~3s faster TTFT than the SSE POST queue); everything
-  // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
+  // Canonical ChatGPT forwarding is pinned to HTTP/SSE by the reliability policy
+  // above. A separate operator opt-in for another Responses gateway remains valid.
   const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     const upstreamWebsocket = provider.upstreamWebsocket === true;
-    if (typeof input === "string" && init && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
+    const canonicalCodex = typeof input === "string" && input === CODEX_RESPONSES_HTTP_URL;
+    const websocketEnabled = canonicalCodex ? CODEX_WS_UPSTREAM_ENABLED : upstreamWebsocket;
+    if (websocketEnabled && typeof input === "string" && init
+      && shouldUseCodexWsUpstream(input, init, runtime, canonicalCodex ? false : upstreamWebsocket)) {
       // The fallback has to be the same HTTP fetch the non-WS branch would have
       // used, protocol pin included: a WS turn that falls back is serving the
       // request over HTTP, and dropping the provider's `upstreamHttpVersion`
