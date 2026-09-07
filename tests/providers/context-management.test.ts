@@ -109,6 +109,7 @@ describe("native GPT catalog opt-in", () => {
       const messages = models[i]!.model_messages as Record<string, any>;
       expect(messages.token_budget.enabled).toBe(row.experimental);
       expect(messages.token_budget.use_history_notes_extension).toBe(row.experimental);
+      expect(models[i]!.supports_experimental_context).toBe(row.experimental);
       expect(messages.token_budget.guidance_message.includes("context-failure-report.ts")).toBe(row.experimental);
       if (row.experimental) expect(messages.token_budget.guidance_message).toContain("**컨텍스트 복구 문제 감지 — 미해결**");
       expect(messages.instructions_template).toBe((original[i]!.model_messages as Record<string, unknown>).instructions_template);
@@ -129,7 +130,11 @@ describe("native GPT catalog opt-in", () => {
     if (parsed.ok) expect(parsed.config.gptContextManagement).toBeUndefined();
   });
   test("uninstall restores a pre-existing upstream token budget without consulting current config", () => {
-    const models: RawEntry[] = [{ slug: "gpt-6-astra", model_messages: { token_budget: { enabled: false, guidance_message: "original" } } }];
+    const models: RawEntry[] = [{
+      slug: "gpt-6-astra",
+      supports_experimental_context: false,
+      model_messages: { token_budget: { enabled: false, guidance_message: "original" } },
+    }];
     const original = structuredClone(models);
     applyGptContextManagement(models, config);
     expect(restoreGptContextManagement(models)).toBe(true);
