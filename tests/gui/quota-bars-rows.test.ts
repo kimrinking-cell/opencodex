@@ -28,6 +28,28 @@ describe("buildQuotaRows (WP070)", () => {
       .toEqual(["quota.weeklyLimit"]);
   });
 
+  test("Codex 18,000-second short windows render as the five-hour limit", () => {
+    const rows = buildQuotaRows(quota({
+      shortPercent: 87,
+      shortResetAt: 2_000_000_000,
+      shortWindowSeconds: 18_000,
+      weeklyPercent: 16,
+    }), "team", t);
+    expect(rows).toMatchObject([
+      { limitLabel: "quota.fiveHourLimit", percent: 87, resetAt: 2_000_000_000 },
+      { limitLabel: "quota.weeklyLimit", percent: 16 },
+    ]);
+  });
+
+  test("other sub-day windows are not mislabeled as five-hour limits", () => {
+    const rows = buildQuotaRows(quota({
+      shortPercent: 50,
+      shortWindowSeconds: 3_600,
+      weeklyPercent: 16,
+    }), "team", t);
+    expect(rows.map(row => row.limitLabel)).toEqual(["quota.weeklyLimit"]);
+  });
+
   test("dual and mixed windows order by RAW identity: 5h, weekly, cursor pools, monthly", () => {
     const rows = buildQuotaRows(quota({
       monthlyPercent: 70,
@@ -186,6 +208,7 @@ describe("maxQuotaUtilisation", () => {
     expect(maxQuotaUtilisation(null)).toBe(-1);
     expect(maxQuotaUtilisation(quota({}))).toBe(-1);
     expect(maxQuotaUtilisation(quota({ weeklyPercent: 30, monthlyPercent: 80 }))).toBe(80);
+    expect(maxQuotaUtilisation(quota({ shortPercent: 100, weeklyPercent: 16 }))).toBe(100);
     expect(maxQuotaUtilisation(quota({
       fiveHourPercent: 10,
       customWindows: [{ label: "x", percent: 95 }],
