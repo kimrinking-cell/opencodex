@@ -203,6 +203,7 @@ import {
 import { handleImages } from "./images";
 import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
 import { handleSearch } from "./search";
+import { handleContextManagement, isContextManagementPath } from "./context-management";
 import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
 import {
   createManagementSessionControl,
@@ -856,6 +857,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     if (path === "/v1/messages" || path === "/v1/chat/completions") return req.method === "POST";
     if (path === "/v1/messages/count_tokens") return req.method === "POST";
     if (path === "/v1/alpha/search") return req.method === "POST";
+    if (isContextManagementPath(path)) return req.method === "POST";
     if (path === "/v1/images/generations" || path === "/v1/images/edits") {
       return req.method === "POST";
     }
@@ -1964,6 +1966,16 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             "x-content-type-options": "nosniff",
           },
         }), req, policy);
+      }
+
+      if (isContextManagementPath(url.pathname) && req.method === "POST") {
+        disableResponsesRequestTimeout(req, requestServer);
+        if (isDraining()) return drainingResponse(req, policy);
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
+        return runAdmittedHttpTurn(req, policy, async lease =>
+          withCors(await handleContextManagement(req, config, lease), req, policy));
       }
 
       if (url.pathname === "/v1/alpha/search" && req.method === "POST") {
