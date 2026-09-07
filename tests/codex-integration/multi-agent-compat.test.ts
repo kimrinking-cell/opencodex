@@ -768,6 +768,13 @@ describe("multiAgentGuidanceText", () => {
     expect(text).toContain("kimi/k3");
   });
 
+  test("external routed guidance omits proxy-executed fallback policy", async () => {
+    const parsed = parsedFixture({ tools: [{ name: "spawn_agent" }] });
+    const options = { subagentModelFallback: ["alibaba-token-plan/qwen3.8-max"] };
+    expect(await multiAgentGuidanceText(parsed, options)).toContain("alibaba-token-plan/qwen3.8-max");
+    expect(await multiAgentGuidanceText(parsed, { ...options, externalRouted: true })).toBeNull();
+  });
+
   test("v1 ignores injectionPrompt and custom prompt does not fire a bare v2 surface", async () => {
     codexHomeFixture(V2_ON);
     const custom = "CUSTOM RULES model={{model}} effort={{effort}}{{roster}}";
