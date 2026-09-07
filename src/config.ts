@@ -1693,6 +1693,24 @@ function warnDegradedStreamMode(rawParsed: unknown, validated: OcxConfig): void 
  * provider/key behind a default config. Invalid fields are dropped with a warning; the management
  * write boundary still rejects invalid policies explicitly.
  */
+/** Preserve the pre-2.28 pacing knob while allowing an explicit new policy to win. */
+export function migrateLegacyRequestPacingForLoad(parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const providers = (parsed as Record<string, unknown>).providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
+  for (const provider of Object.values(providers as Record<string, unknown>)) {
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+    const record = provider as Record<string, unknown>;
+    if (Object.hasOwn(record, "requestPacing") || !Object.hasOwn(record, "maxRequestsPerMinute")) continue;
+    const rpm = record.maxRequestsPerMinute;
+    if (typeof rpm === "number" && Number.isFinite(rpm) && rpm >= 1 / 60 && rpm <= 60_000) {
+      record.requestPacing = { enabled: true, requestsPerMinute: rpm };
+    } else {
+      console.warn("⚠️  config.json legacy maxRequestsPerMinute is invalid — ignoring legacy pacing");
+    }
+  }
+}
+
 function sanitizeRetryOn429ForLoad(parsed: unknown): void {
   if (!parsed || typeof parsed !== "object") return;
   const root = parsed as Record<string, unknown>;
@@ -2254,6 +2272,7 @@ export function loadConfig(): OcxConfig {
     sanitizeAliasesForLoad(parsed);
     sanitizeReasoningPinsForLoad(parsed);
     sanitizeModelDisplayNamesForLoad(parsed);
+    migrateLegacyRequestPacingForLoad(parsed);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
