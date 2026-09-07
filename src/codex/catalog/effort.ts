@@ -263,15 +263,11 @@ export function applyReasoningLevels(
 }
 
 /**
- * Native slugs entitled to the full GPT-5.6-era ladder (low..ultra, with max restored).
+ * Native slugs whose exact self-described/new-family ladder must be preserved.
  *
- * The name is historical: membership is about the LADDER, not the model generation. `gpt-6-astra`
- * qualifies because upstream ships it with the same six rungs
- * (`supported_reasoning_levels` low/medium/high/xhigh/max/ultra, #42607). It used to qualify only
- * as a side effect of borrowing Sol's capability source; once it became self-described that
- * accident disappeared, and the sync path's else-branch
- * (`applyReasoningLevels(entry, ["low","medium","high","xhigh"])`) would have truncated the
- * shipped ladder, silently dropping `max` and `ultra`.
+ * The name is historical: membership is about preserving the projected ladder, not requiring six
+ * rungs. `gpt-6-astra` qualifies so the generic native fallback cannot truncate its official
+ * low/medium/high/xhigh/max ladder or synthesize `ultra`.
  */
 export function isGpt56NativeSlug(slug: string): boolean {
   if (slug.includes("/")) return false;

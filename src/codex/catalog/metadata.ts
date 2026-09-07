@@ -181,13 +181,43 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
   [NATIVE_GPT6_ASTRA_MODEL]: { contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 },
 };
 
+/** The public GPT-6-Astra API contract exposes these five reasoning-effort values, and no ultra. */
+export const NATIVE_GPT6_ASTRA_REASONING_EFFORTS = [
+  "low", "medium", "high", "xhigh", "max",
+] as const;
+
+/**
+ * Correct pinned and persisted native rows at the product projection boundary.
+ * Keep the pinned snapshot byte-identical for provenance while removing its
+ * unsupported Astra-only `ultra` presentation rung from the Codex catalog.
+ */
+export function normalizeNativeOpenAiReasoningLevels(entry: RawEntry): RawEntry {
+  if (entry.slug !== NATIVE_GPT6_ASTRA_MODEL) return entry;
+  const existing = new Map(
+    (Array.isArray(entry.supported_reasoning_levels) ? entry.supported_reasoning_levels : [])
+      .flatMap(level => typeof level === "object" && level !== null
+        && typeof (level as { effort?: unknown }).effort === "string"
+        ? [[(level as { effort: string }).effort, level] as const]
+        : []),
+  );
+  return {
+    ...entry,
+    supported_reasoning_levels: NATIVE_GPT6_ASTRA_REASONING_EFFORTS.map(effort => (
+      existing.get(effort)
+        ?? CODEX_REASONING_LEVELS.find(level => level.effort === effort)
+        ?? { effort, description: `${effort} reasoning` }
+    )),
+  };
+}
+
 const PINNED_UPSTREAM_MODELS: Map<string, RawEntry> = new Map(
   ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
     .flatMap(model => typeof model.slug === "string" ? [[model.slug, model] as const] : []),
 );
 
 function pinnedNativeCapabilityEntry(slug: string): RawEntry | undefined {
-  return PINNED_UPSTREAM_MODELS.get(nativeOpenAiCapabilitySourceSlug(slug));
+  const entry = PINNED_UPSTREAM_MODELS.get(nativeOpenAiCapabilitySourceSlug(slug));
+  return entry ? normalizeNativeOpenAiReasoningLevels(entry) : undefined;
 }
 
 /**
@@ -544,7 +574,9 @@ function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
   }
   const source = PINNED_UPSTREAM_MODELS.get(sourceSlug);
   if (!source) return undefined;
-  if (slug === sourceSlug) return withDerivedBaseInstructions(source);
+  if (slug === sourceSlug) {
+    return normalizeNativeOpenAiReasoningLevels(withDerivedBaseInstructions(source));
+  }
 
   const alias = structuredClone(source) as RawEntry;
   alias.slug = slug;
