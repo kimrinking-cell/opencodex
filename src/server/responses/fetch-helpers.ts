@@ -10,7 +10,6 @@ import type { WsData } from "../ws-bridge";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
-import { CODEX_RESPONSES_HTTP_URL } from "./codex-ws-request";
 
 export { withUpstreamHttpVersion };
 
@@ -97,7 +96,9 @@ export function providerFetch(
   // above. A separate operator opt-in for another Responses gateway remains valid.
   const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     const upstreamWebsocket = provider.upstreamWebsocket === true;
-    const canonicalCodex = typeof input === "string" && input === CODEX_RESPONSES_HTTP_URL;
+    const canonicalCodex = typeof input === "string" && init
+      ? shouldUseCodexWsUpstream(input, init, runtime, false)
+      : false;
     const websocketEnabled = canonicalCodex ? CODEX_WS_UPSTREAM_ENABLED : upstreamWebsocket;
     if (websocketEnabled && typeof input === "string" && init
       && shouldUseCodexWsUpstream(input, init, runtime, canonicalCodex ? false : upstreamWebsocket)) {
