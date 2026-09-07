@@ -17,6 +17,18 @@ export type QuotaBarRow = {
   resetAt?: number;
 };
 
+const FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60;
+
+function displayedFiveHourWindow(quota: AccountQuota): { percent: number; resetAt?: number } | null {
+  if (typeof quota.fiveHourPercent === "number") {
+    return { percent: quota.fiveHourPercent, resetAt: quota.fiveHourResetAt };
+  }
+  if (quota.shortWindowSeconds !== FIVE_HOUR_WINDOW_SECONDS || typeof quota.shortPercent !== "number") {
+    return null;
+  }
+  return { percent: quota.shortPercent, resetAt: quota.shortResetAt };
+}
+
 /**
  * Window ordering is computed from RAW wire identities BEFORE localization
  * (ranking on translated labels breaks the moment a locale changes copy):
@@ -70,15 +82,16 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
   if (!displayQuota) return [];
   // Intrinsic ranks for the standard slots; custom windows rank on their RAW labels.
   const ranked: Array<{ rank: number; row: QuotaBarRow }> = [];
-  if (typeof displayQuota.fiveHourPercent === "number") {
+  const fiveHour = displayedFiveHourWindow(displayQuota);
+  if (fiveHour) {
     ranked.push({
       rank: 0,
       row: {
         windowKey: "fiveHour",
         label: t("codexAuth.fiveHour"),
         limitLabel: t("quota.fiveHourLimit"),
-        percent: displayQuota.fiveHourPercent,
-        resetAt: displayQuota.fiveHourResetAt,
+        percent: fiveHour.percent,
+        resetAt: fiveHour.resetAt,
       },
     });
   }
@@ -144,7 +157,7 @@ export function buildQuotaRows(quota: AccountQuota | null, plan: string | null |
 /** Max utilisation across known windows (for sorting providers by urgency). */
 export function maxQuotaUtilisation(quota: AccountQuota | null): number {
   if (!quota) return -1;
-  const vals = [quota.fiveHourPercent, quota.weeklyPercent, quota.monthlyPercent]
+  const vals = [quota.fiveHourPercent, quota.shortPercent, quota.weeklyPercent, quota.monthlyPercent]
     .filter((n): n is number => typeof n === "number");
   for (const w of quota.customWindows ?? []) {
     if (typeof w.percent === "number") vals.push(w.percent);
