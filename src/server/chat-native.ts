@@ -47,6 +47,7 @@ import {
   addFinalRequestLog,
   beginRequestAttempt,
   noteAttemptSend,
+  recordAdapterReasoning,
   recordFirstOutput,
   recordAttemptCredentialSource,
   sealRequestAttemptIdentity,
@@ -188,7 +189,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
   };
   const buildActiveRequest = () => {
     recordAttemptCredentialSource(attempt, route.providerName, activeProvider, activeAdapter.name);
-    return buildOpenAIChatPassthroughRequest(
+    const request = buildOpenAIChatPassthroughRequest(
       activeProvider,
       options.chatBody,
       route.modelId,
@@ -196,6 +197,8 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
       config.fastMode,
     );
+    recordAdapterReasoning(logCtx, request);
+    return request;
   };
   try {
     activeRequest = buildActiveRequest();
