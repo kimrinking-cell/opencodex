@@ -1208,6 +1208,77 @@ test("chat-native uses the shared request builder and normalized Chat Completion
   }
 });
 
++test("chat-native applies the exact TokenRouter Qwen3.8 Max Free reasoning boundary and logs it", async () => {
+  const { clearRequestLogsForTests, getRequestLogEntries } = await import("../../src/server/request-log");
+  clearRequestLogsForTests();
+  const captured: Array<Record<string, unknown>> = [];
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      captured.push(await req.json() as Record<string, unknown>);
+      return Response.json({
+        id: "chatcmpl_tokenrouter",
+        object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+      });
+    },
+  });
+  const upstreamFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.hostname === "api.tokenrouter.com") {
+      return upstreamFetch(new URL(`${url.pathname}${url.search}`, upstream.url), init);
+    }
+    return upstreamFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({
+    port: 0,
+    defaultProvider: "tokenrouter",
+    providers: {
+      tokenrouter: {
+        adapter: "openai-chat",
+        baseUrl: "https://api.tokenrouter.com/v1",
+        apiKey: "k",
+        models: ["qwen/qwen3.8-max-free"],
+        liveModels: false,
+      },
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  try {
+    for (const reasoning_effort of ["low", "medium", "high", "xhigh", "max", "ultra"]) {
+      const response = await fetch(new URL("/v1/chat/completions", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "tokenrouter/qwen-qwen3.8-max-free",
+          stream: false,
+          reasoning_effort,
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+      expect(response.status).toBe(200);
+      await response.json();
+    }
+    expect(captured.map(body => body.reasoning_effort)).toEqual(["low", "medium", undefined, undefined, undefined, undefined]);
+    const logs = getRequestLogEntries().filter(entry => entry.inboundProtocol === "chat" && entry.requestedEffort !== undefined);
+    expect(logs.slice(-6).map(entry => [entry.requestedEffort, entry.effectiveEffort, entry.reasoningWireValue, entry.reasoningWireOmitted])).toEqual([
+      ["low", "low", "low", undefined],
+      ["medium", "medium", "medium", undefined],
+      ["high", "xhigh", "xhigh", true],
+      ["xhigh", "xhigh", "xhigh", true],
+      ["max", "xhigh", "xhigh", true],
+      ["ultra", "xhigh", "xhigh", true],
+    ]);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+    globalThis.fetch = upstreamFetch;
+    clearRequestLogsForTests();
+  }
+});
+
 test("chat-native preserves caller Chat fields on the upstream wire", async () => {
   const { server: upstream, captured } = mockChatUpstreamCapturing();
   saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`, {
