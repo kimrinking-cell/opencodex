@@ -109,6 +109,45 @@ describe("Codex catalog sync hardening", () => {
     if (existsSync(opencodexHome)) removeTreeWithRetry(opencodexHome);
   });
 
++  test("GPT context opt-in survives real catalog sync and disabling restores native defaults", () => {
+    const catalogPath = join(codexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n');
+    writeFileSync(catalogPath, JSON.stringify({ models: ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"].map(nativeEntry) }));
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: { access_token: "fixture-token", account_id: "fixture-account" } }));
+    const result = runScript(codexHome, opencodexHome, `
+      const fs = require("node:fs");
+      globalThis.fetch = async input => {
+        const url = new URL(typeof input === "string" ? input : input.url);
+        if (url.hostname === "chatgpt.com" && url.pathname.endsWith("/models")) {
+          return Response.json({ models: ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"].map(slug => ({ slug, supported_in_api: true, visibility: "list" })) });
+        }
+        throw new Error("unexpected context fixture fetch");
+      };
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      const config = { gptContextManagement: true, openaiProviderTierVersion: 2, providers: {
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex", liveModels: false },
+        fixture: { adapter: "openai-chat", baseUrl: "https://example.test/v1", liveModels: false, models: ["claude-fixture"] }
+      } };
+      const read = () => JSON.parse(fs.readFileSync(${JSON.stringify(catalogPath)}, "utf8")).models;
+      await syncCatalogModels(config, { allowWhenDesiredDisabled: true });
+      const enabled = read();
+      await syncCatalogModels(config, { allowWhenDesiredDisabled: true });
+      const again = read();
+      await syncCatalogModels({ ...config, gptContextManagement: false }, { allowWhenDesiredDisabled: true });
+      console.log(JSON.stringify({ enabled, again, disabled: read() }));
+    `);
+    expect(result.status).toBe(0);
+    const { enabled, again, disabled } = JSON.parse(result.stdout);
+    const budgets = (rows: any[]) => rows.map(row => ({ slug: row.slug, budget: row.model_messages?.token_budget }));
+    expect(budgets(again)).toEqual(budgets(enabled));
+    for (const slug of ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"]) {
+      expect(enabled.find((row: any) => row.slug === slug)?.model_messages.token_budget.enabled).toBe(slug === "gpt-5.6-sol" || slug === "gpt-6-astra");
+      expect(disabled.find((row: any) => row.slug === slug)?.model_messages.token_budget?.enabled).not.toBe(true);
+    }
+    expect(enabled.find((row: any) => row.slug === "fixture/claude-fixture")?.model_messages?.token_budget?.enabled).not.toBe(true);
+    expect(again.find((row: any) => row.slug === "fixture/claude-fixture")?.model_messages?.token_budget?.enabled).not.toBe(true);
+  });
+
   test("Gap B: drops legacy and unentitled account-gated natives but keeps supported + user natives", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");

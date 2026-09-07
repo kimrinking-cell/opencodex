@@ -331,6 +331,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexDesktopAuthless: config.codexDesktopAuthless === true,
       // Absent keeps Design B remote compaction; true selects the dedicated provider identity.
       codexClientCompaction: config.codexClientCompaction === true,
+      gptContextManagement: config.gptContextManagement === true,
       startupHealth: await readStartupHealth(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
@@ -422,6 +423,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexMainAccountHardLock?: unknown;
       codexDesktopAuthless?: unknown;
       codexClientCompaction?: unknown;
+      gptContextManagement?: unknown;
     };
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
@@ -433,8 +435,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.ultraFastTier === undefined
       && body.codexMainAccountHardLock === undefined
       && body.codexDesktopAuthless === undefined
-      && body.codexClientCompaction === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexSparkQuota, ultraFastTier, codexMainAccountHardLock, codexDesktopAuthless, or codexClientCompaction" }, 400);
+      && body.codexClientCompaction === undefined
+      && body.gptContextManagement === undefined) {
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexSparkQuota, ultraFastTier, codexMainAccountHardLock, codexDesktopAuthless, codexClientCompaction, or gptContextManagement" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -463,6 +466,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.codexClientCompaction !== undefined && typeof body.codexClientCompaction !== "boolean") {
       return jsonResponse({ error: "codexClientCompaction boolean is required" }, 400);
+    }
+    if (body.gptContextManagement !== undefined && typeof body.gptContextManagement !== "boolean") {
+      return jsonResponse({ error: "gptContextManagement boolean is required" }, 400);
     }
     let quotaAutoRefreshChange: { id: string; window: "fiveHour" | "weekly"; enabled: boolean } | undefined;
     if (body.codexQuotaAutoRefresh !== undefined) {
@@ -518,6 +524,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexDesktopAuthless: Object.hasOwn(config, "codexDesktopAuthless"),
       codexClientCompaction: config.codexClientCompaction,
       hasCodexClientCompaction: Object.hasOwn(config, "codexClientCompaction"),
+      gptContextManagement: config.gptContextManagement,
+      hasGptContextManagement: Object.hasOwn(config, "gptContextManagement"),
     };
     const pickerWasEnabled = codexAccountPickerEnabled(config);
     let pickerIsEnabled = pickerWasEnabled;
@@ -559,6 +567,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
       if (body.codexClientCompaction === true) config.codexClientCompaction = true;
       else if (body.codexClientCompaction === false) deleteConfigTopLevelKey(config, "codexClientCompaction");
+      if (typeof body.gptContextManagement === "boolean") config.gptContextManagement = body.gptContextManagement;
       if (quotaAutoRefreshChange) {
         const { id, window, enabled } = quotaAutoRefreshChange;
         const setting = { ...(config.codexQuotaAutoRefresh?.[id] ?? {}) };
@@ -607,6 +616,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexClientCompaction) {
         config.codexClientCompaction = previousSettings.codexClientCompaction;
       } else deleteConfigTopLevelKey(config, "codexClientCompaction");
+      if (previousSettings.hasGptContextManagement) {
+        config.gptContextManagement = previousSettings.gptContextManagement;
+      } else deleteConfigTopLevelKey(config, "gptContextManagement");
       throw error;
     }
     if (typeof body.appOwnedMemoryBudgetMb === "number") {
@@ -620,6 +632,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const catalogRefresh = pickerWasEnabled !== pickerIsEnabled
       || authlessWasEnabled !== authlessIsEnabled
       || clientCompactionWasEnabled !== clientCompactionIsEnabled
+      || (previousSettings.gptContextManagement === true) !== (config.gptContextManagement === true)
       ? await convergeCodexCatalog()
       : undefined;
     const catalogRefreshPending = catalogRefresh
@@ -639,6 +652,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       showCodexSparkQuota: config.showCodexSparkQuota === true,
       codexDesktopAuthless: authlessIsEnabled,
       codexClientCompaction: clientCompactionIsEnabled,
+      gptContextManagement: config.gptContextManagement === true,
       codexMainAccountHardLock: config.codexMainAccountHardLock === true,
       mainAccountHardLock: getMainAccountHardLockStatus(config),
       startupHealth: await readStartupHealth(config),
