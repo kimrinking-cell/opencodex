@@ -16,20 +16,28 @@ import { contextFailureReportGuidance, REPORT_MODELS } from "./context-failure-r
 export const GPT_CONTEXT_MODELS: ReadonlySet<string> = new Set(REPORT_MODELS);
 export const LEGACY_CONTEXT_MODELS: ReadonlySet<string> = new Set(["gpt-5.6-luna", "gpt-5.6-terra"]);
 const CATALOG_MARKER = "opencodex_context_management_original";
+const CONTEXT_SUPPORT_MARKER = "opencodex_context_management_original_supports_experimental_context";
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
 /** Restore only metadata owned by this opt-in, including when the proxy is uninstalled. */
 export function restoreGptContextManagement(models: RawEntry[]): boolean {
   let changed = false;
   for (const row of models) {
-    if (!Object.hasOwn(row, CATALOG_MARKER)) continue;
-    const messages = row.model_messages as Record<string, unknown> | undefined;
-    if (messages && typeof messages === "object") {
-      if (row[CATALOG_MARKER] === null) delete messages.token_budget;
-      else messages.token_budget = row[CATALOG_MARKER];
+    if (Object.hasOwn(row, CATALOG_MARKER)) {
+      const messages = row.model_messages as Record<string, unknown> | undefined;
+      if (messages && typeof messages === "object") {
+        if (row[CATALOG_MARKER] === null) delete messages.token_budget;
+        else messages.token_budget = row[CATALOG_MARKER];
+      }
+      delete row[CATALOG_MARKER];
+      changed = true;
     }
-    delete row[CATALOG_MARKER];
-    changed = true;
+    if (Object.hasOwn(row, CONTEXT_SUPPORT_MARKER)) {
+      if (row[CONTEXT_SUPPORT_MARKER] === null) delete row.supports_experimental_context;
+      else row.supports_experimental_context = row[CONTEXT_SUPPORT_MARKER];
+      delete row[CONTEXT_SUPPORT_MARKER];
+      changed = true;
+    }
   }
   return changed;
 }
@@ -62,6 +70,9 @@ export function applyGptContextManagement(models: RawEntry[], config: OcxConfig)
       ? row.model_messages as Record<string, unknown> : {};
     row[CATALOG_MARKER] = own.token_budget ?? null;
     const experimental = GPT_CONTEXT_MODELS.has(slug);
+    row[CONTEXT_SUPPORT_MARKER] = Object.hasOwn(row, "supports_experimental_context")
+      ? row.supports_experimental_context : null;
+    row.supports_experimental_context = experimental;
     row.model_messages = { ...own, token_budget: {
       ...defaults,
       enabled: experimental,
