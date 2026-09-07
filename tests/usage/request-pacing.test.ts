@@ -14,6 +14,7 @@ import { providerFetch } from "../../src/server/responses/fetch-helpers";
 import { fetchWithHeaderTimeout } from "../../src/server/responses/fetch-helpers";
 import { requestPacingOverloadResponse } from "../../src/server/responses/pacing-overload";
 import type { OcxProviderConfig } from "../../src/types";
+import { migrateLegacyRequestPacingForLoad } from "../../src/config";
 
 afterEach(() => resetProviderRequestPacingForTest());
 
@@ -61,6 +62,14 @@ function fakePacingClock(): {
 }
 
 describe("requestPacingIntervalMs", () => {
+  test("legacy maxRequestsPerMinute migrates and an explicit new policy wins", () => {
+    const legacy = { providers: { p: { maxRequestsPerMinute: 38 } } };
+    migrateLegacyRequestPacingForLoad(legacy);
+    expect(requestPacingIntervalMs(legacy.providers.p as OcxProviderConfig)).toBeCloseTo(60_000 / 38, 5);
+    const explicit = { providers: { p: { maxRequestsPerMinute: 38, requestPacing: { enabled: true, requestsPerMinute: 120 } } } };
+    migrateLegacyRequestPacingForLoad(explicit);
+    expect((explicit.providers.p as OcxProviderConfig).requestPacing?.requestsPerMinute).toBe(120);
+  });
   test("uses the slower of provider RPM, provider delay, and model override", () => {
     const configured = provider({
       enabled: true,
