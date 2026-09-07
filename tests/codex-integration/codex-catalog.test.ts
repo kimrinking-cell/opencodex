@@ -3539,7 +3539,7 @@ describe("Codex catalog routed normalization", () => {
       node_repl_disabled: false,
       node_repl_auto_review_required: false,
       include_plugin_usage_instructions: true,
-      include_apps_usage_instructions: false,
+      include_apps_usage_instructions: true,
     };
     for (const slug of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
       expect(upstreamNativeEntry(slug)).toMatchObject(codex0151Contract);
@@ -4325,7 +4325,7 @@ describe("Codex catalog routed normalization", () => {
       node_repl_disabled: false,
       node_repl_auto_review_required: false,
       include_plugin_usage_instructions: false,
-      include_apps_usage_instructions: true,
+      include_apps_usage_instructions: false,
     });
   });
 
