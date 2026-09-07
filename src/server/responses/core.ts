@@ -218,6 +218,7 @@ import {
 } from "../auth-cors";
 import type { DataPlaneAdmission } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
+import { isCodexReasoningEffort } from "../../reasoning-effort";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../../codex/loopback-target";
@@ -3356,11 +3357,23 @@ async function handleResponsesInner(
         sourceIdentity = { providerName: resolvedSource.providerName, modelId: sourcePrefix };
       } catch { /* Native Codex helper calls remain OpenAI-owned without an enabled OpenAI route. */ }
       const targetRoute = resolveRoute(_sci.model);
-      if (shouldInterceptShadowCall(parsed.modelId, _sci.sourceModels, sourceIdentity, targetRoute)) {
+      if (shouldInterceptShadowCall(parsed.modelId, _sci.sourceModels, sourceIdentity, targetRoute, req.headers)) {
         const _sciOriginal = parsed.modelId;
         parsed.modelId = _sci.model;
         if (parsed._rawBody && typeof parsed._rawBody === "object") {
           (parsed._rawBody as { model?: string }).model = _sci.model;
+        }
+        // An explicit helper effort overrides the caller when valid. Malformed
+        // persisted values fail safe at low; an omitted setting preserves the
+        // caller's configured effort from the current upstream contract.
+        if (Object.hasOwn(_sci, "effort")) {
+          const shadowEffort = typeof _sci.effort === "string" && isCodexReasoningEffort(_sci.effort)
+            ? _sci.effort
+            : "low";
+          parsed.options.reasoning = shadowEffort;
+          if (parsed._rawBody && typeof parsed._rawBody === "object") {
+            (parsed._rawBody as Record<string, unknown>).reasoning = { effort: shadowEffort };
+          }
         }
         // Record the operator-configured prefix that matched, NOT the caller's raw model string.
         // Matching is by prefix, so a caller can append arbitrary text and still intercept; that
