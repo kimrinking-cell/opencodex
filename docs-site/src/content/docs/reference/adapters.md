@@ -43,6 +43,15 @@ unverified; `[context-relay]` failures record phase/status/elapsed/abort flags o
 Notes append may already have committed upstream, so read back before retrying and keep task
 recovery separate from checkpoint persistence.
 
+The reporter accepts both the legacy native backend-error string and the bounded native
+`kind`, HTTP `status`, and `elapsed_ms` suffix. It records these as transport observations,
+not an upstream root cause or proof that a write failed to persist. Free-form backend text,
+URLs, headers, and response bodies are never copied into a report. The relay still uses a
+35-second processing deadline; a paired native client with a 40-second response deadline
+can receive the relay's final HTTP error instead of racing an equal timeout. This native
+client change requires its own build and activation; updating the proxy alone does not
+change the client's deadline. Neither path automatically retries a Notes write.
+
 ## `openai-chat`
 
 **Targets:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`; a trailing `/chat/completions` or `/` on `baseUrl` is stripped first) and every compatible

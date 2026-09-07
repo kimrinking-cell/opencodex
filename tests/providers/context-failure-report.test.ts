@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -120,6 +121,56 @@ test("keeps a native Notes write and the exact backend failure as a recorded rep
   expect(result).toMatchObject({ recorded: true, classification: "backend_error", evidence_status: "observed" });
   const report = JSON.parse(readFileSync(result.file, "utf8"));
   expect(report).toMatchObject({ backend_error_observed: true, checkpoint_write_observed: true, recovery_evidence: "unverified" });
+});
+
+test("preserves only bounded native transport facts without claiming a root cause or write outcome", async () => {
+  for (const [suffix, details] of [
+    [" [kind=http status=504 elapsed_ms=35102]", { backend_error_kind: "http", backend_http_status: 504, backend_elapsed_ms: 35102 }],
+    [" [kind=timeout elapsed_ms=40001]", { backend_error_kind: "timeout", backend_elapsed_ms: 40001 }],
+  ] as const) {
+    const env = makeStateFixture(currentSessionLines(
+      { type: "function_call", namespace: "notes", name: "append_to_file", arguments: "{}", call_id: "write-detail" },
+      { type: "function_call_output", call_id: "write-detail", output: BACKEND_FAILURE + suffix },
+    ));
+    const result = await writeContextFailureReportWithEvidence(join(root, randomUUID()), { ...input, reason: "notes_error" }, env);
+    const report = JSON.parse(readFileSync(result.file, "utf8"));
+    expect(report).toMatchObject({
+      classification: "backend_error", backend_error_observed: true,
+      independently_verified: false, recovery_evidence: "unverified", ...details,
+    });
+    if (!("backend_http_status" in details)) expect(report.backend_http_status).toBeUndefined();
+    expect(report.write_outcome).toBeUndefined();
+    expect(report.root_cause).toBeUndefined();
+    expect(statSync(result.file).size).toBeLessThan(1024);
+  }
+});
+
+test("rejects free-form native error details and never carries old HTTP status onto a legacy error", async () => {
+  for (const suffix of [
+    " [kind=http status=999 elapsed_ms=10]", " [kind=http elapsed_ms=10]",
+    " [kind=timeout status=504 elapsed_ms=10]", " [kind=private-text elapsed_ms=10]",
+    " [kind=http status=503 elapsed_ms=10] private backend body",
+    " [kind=http status=503 elapsed_ms=-10]",
+  ]) {
+    const env = makeStateFixture(currentSessionLines(
+      { type: "function_call_output", call_id: "invalid-detail", output: BACKEND_FAILURE + suffix },
+    ));
+    const result = await writeContextFailureReportWithEvidence(join(root, randomUUID()), { ...input, reason: "history_error" }, env);
+    const report = JSON.parse(readFileSync(result.file, "utf8"));
+    expect(report.backend_error_observed).toBeUndefined();
+    expect(report.backend_error_kind).toBeUndefined();
+    expect(JSON.stringify(report)).not.toContain("private");
+  }
+  const env = makeStateFixture(currentSessionLines(
+    { type: "function_call_output", call_id: "old-http", output: BACKEND_FAILURE + " [kind=http status=503 elapsed_ms=10]" },
+    { type: "function_call_output", call_id: "new-legacy", output: BACKEND_FAILURE },
+  ));
+  const result = await writeContextFailureReportWithEvidence(join(root, randomUUID()), { ...input, reason: "history_error" }, env);
+  const report = JSON.parse(readFileSync(result.file, "utf8"));
+  expect(report.backend_error_observed).toBe(true);
+  expect(report.backend_error_kind).toBeUndefined();
+  expect(report.backend_http_status).toBeUndefined();
+  expect(report.backend_elapsed_ms).toBeUndefined();
 });
 
 test("does not suppress when rollout evidence is missing, partial, encrypted, or dynamically ambiguous", async () => {
