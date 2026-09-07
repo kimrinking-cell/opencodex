@@ -142,7 +142,9 @@ describe("Codex catalog sync hardening", () => {
     expect(budgets(again)).toEqual(budgets(enabled));
     for (const slug of ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"]) {
       expect(enabled.find((row: any) => row.slug === slug)?.model_messages.token_budget.enabled).toBe(slug === "gpt-5.6-sol" || slug === "gpt-6-astra");
+      expect(enabled.find((row: any) => row.slug === slug)?.supports_experimental_context).toBe(slug === "gpt-5.6-sol" || slug === "gpt-6-astra");
       expect(disabled.find((row: any) => row.slug === slug)?.model_messages.token_budget?.enabled).not.toBe(true);
+      expect(disabled.find((row: any) => row.slug === slug)?.supports_experimental_context).toBeUndefined();
     }
     expect(enabled.find((row: any) => row.slug === "fixture/claude-fixture")?.model_messages?.token_budget?.enabled).not.toBe(true);
     expect(again.find((row: any) => row.slug === "fixture/claude-fixture")?.model_messages?.token_budget?.enabled).not.toBe(true);
