@@ -1234,3 +1234,30 @@ test("both writers restore pristine native priorities after featured-model trans
   expect(finalModels.find(entry => entry.slug === "gpt-5.6-sol")?.priority).toBe(41);
   expect(finalModels.find(entry => entry.slug === "gpt-5.5")?.priority).toBe(57);
 });
+
+test("management convergence preserves the Sol/Astra context policy across refreshes and restores it on disable", async () => {
+  const slugs = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"];
+  for (const account of ["main-chatgpt-account", "side-chatgpt-account"]) modelRostersByChatgptAccount.set(account, slugs);
+  writeCatalog(slugs.map(slug => ({ ...nativeEntry(), slug })));
+  const nextConfig = { ...config(true), gptContextManagement: true };
+  const once = (await convergeCatalog(nextConfig)).models ?? [];
+  const twice = (await convergeCatalog(nextConfig)).models ?? [];
+  const budgets = (rows: RawEntry[]) => rows.map(row => ({ slug: row.slug, budget: (row.model_messages as any)?.token_budget }));
+  expect(budgets(twice)).toEqual(budgets(once));
+  for (const slug of slugs) {
+    const experimental = slug === "gpt-5.6-sol" || slug === "gpt-6-astra";
+    for (const prefix of ["", "desktop/", "team/"]) {
+      const row = twice.find(entry => entry.slug === `${prefix}${slug}`);
+      const budget = (row?.model_messages as any)?.token_budget;
+      expect(budget?.enabled).toBe(experimental);
+      expect(budget?.use_history_notes_extension).toBe(experimental);
+      expect(budget?.guidance_message.includes("context-failure-report.ts")).toBe(experimental);
+    }
+  }
+  const disabled = (await convergeCatalog({ ...nextConfig, gptContextManagement: false })).models ?? [];
+  for (const row of disabled) {
+    expect(Object.hasOwn(row, "opencodex_context_management_original")).toBe(false);
+    expect((row.model_messages as any)?.token_budget?.enabled).not.toBe(true);
+    expect((row.model_messages as any)?.token_budget?.guidance_message ?? "").not.toContain("context-failure-report.ts");
+  }
+});
