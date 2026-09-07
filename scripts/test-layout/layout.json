@@ -1077,6 +1077,7 @@
     "router-discarded-baseurl-warning.test.ts": "routing",
     "router-template-baseurl.test.ts": "routing",
     "router.test.ts": "routing",
+    "routed-instruction-hygiene.test.ts": "routing",
     "routing-analytics.test.ts": "routing",
     "routing-capability-catalog.test.ts": "routing",
     "routing-capability-model-matching.test.ts": "routing",
