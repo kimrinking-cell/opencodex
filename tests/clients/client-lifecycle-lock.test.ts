@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -321,6 +321,7 @@ test.skipIf(process.platform === "win32")("POSIX paths are private and links are
   expect(lstatSync(lockPath).mode & 0o777).toBe(0o600);
   const target = join(root, "target");
   writeFileSync(target, "untouched", { mode: 0o644 });
+  chmodSync(target, 0o644);
   const linked = join(root, "symlink.sqlite");
   symlinkSync(target, linked);
   expect(() => withClientLifecycleSync(() => {}, { lockPath: linked })).toThrow("client_lifecycle_lock_failed");
