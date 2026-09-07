@@ -88,6 +88,7 @@ export interface RequestLogContext {
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  reasoningWireOmitted?: boolean;
   callerServiceTier?: string;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
@@ -180,6 +181,7 @@ export interface RequestLogEntry {
   effectiveEffort?: string;
   reasoningWireField?: string;
   reasoningWireValue?: string | number | boolean;
+  reasoningWireOmitted?: boolean;
   callerServiceTier?: string;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
@@ -299,6 +301,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
     ...(entry.reasoningWireField ? { reasoningWireField: entry.reasoningWireField } : {}),
     ...(entry.reasoningWireValue !== undefined ? { reasoningWireValue: entry.reasoningWireValue } : {}),
+    ...(entry.reasoningWireOmitted === true ? { reasoningWireOmitted: true } : {}),
     ...(entry.callerServiceTier ? { callerServiceTier: entry.callerServiceTier } : {}),
     ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
     ...(entry.requestedSpeedLabel ? { requestedSpeedLabel: entry.requestedSpeedLabel } : {}),
@@ -424,6 +427,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
       ...(entry.reasoningWireField ? { reasoningWireField: entry.reasoningWireField } : {}),
       ...(entry.reasoningWireValue !== undefined ? { reasoningWireValue: entry.reasoningWireValue } : {}),
+      ...(entry.reasoningWireOmitted === true ? { reasoningWireOmitted: true } : {}),
       ...(entry.callerServiceTier ? { callerServiceTier: entry.callerServiceTier } : {}),
       ...(entry.requestedServiceTier ? { requestedServiceTier: entry.requestedServiceTier } : {}),
       ...(entry.requestedSpeedLabel ? { requestedSpeedLabel: entry.requestedSpeedLabel } : {}),
@@ -496,11 +500,13 @@ export function recordAdapterReasoning(
   delete logCtx.effectiveEffort;
   delete logCtx.reasoningWireField;
   delete logCtx.reasoningWireValue;
+  delete logCtx.reasoningWireOmitted;
   const attempt = logCtx.activeAttempt;
   if (attempt) {
     delete attempt.effectiveEffort;
     delete attempt.reasoningWireField;
     delete attempt.reasoningWireValue;
+    delete attempt.reasoningWireOmitted;
   }
   recordAttemptRequestedEffort(logCtx);
 
@@ -528,10 +534,12 @@ export function recordAdapterReasoning(
     logCtx.effectiveEffort = effectiveEffort;
     logCtx.reasoningWireField = reasoning.wireField;
     logCtx.reasoningWireValue = wireValue;
+    if (reasoning.reasoningWireOmitted === true) logCtx.reasoningWireOmitted = true;
     if (attempt) {
       attempt.effectiveEffort = effectiveEffort;
       attempt.reasoningWireField = reasoning.wireField;
       attempt.reasoningWireValue = wireValue;
+      if (reasoning.reasoningWireOmitted === true) attempt.reasoningWireOmitted = true;
     }
   } catch {
     // Request logging is best-effort and must not affect request delivery.
@@ -1050,6 +1058,7 @@ export function addFinalRequestLog(
     ...(logCtx.effectiveEffort ? { effectiveEffort: logCtx.effectiveEffort } : {}),
     ...(logCtx.reasoningWireField ? { reasoningWireField: logCtx.reasoningWireField } : {}),
     ...(logCtx.reasoningWireValue !== undefined ? { reasoningWireValue: logCtx.reasoningWireValue } : {}),
+    ...(logCtx.reasoningWireOmitted === true ? { reasoningWireOmitted: true } : {}),
     ...(logCtx.callerServiceTier ? { callerServiceTier: logCtx.callerServiceTier } : {}),
     ...(logCtx.requestedServiceTier ? { requestedServiceTier: logCtx.requestedServiceTier } : {}),
     ...(logCtx.requestedSpeedLabel ? { requestedSpeedLabel: logCtx.requestedSpeedLabel } : {}),

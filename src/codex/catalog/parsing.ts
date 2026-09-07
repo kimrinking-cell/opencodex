@@ -113,6 +113,8 @@ export interface CatalogModel {
   owned_by?: string;
   reasoningEfforts?: string[];
   defaultReasoningEffort?: string;
+  /** Preserve a provider/model's explicitly exact reasoning ladder during catalog synthesis. */
+  preserveReasoningEfforts?: boolean;
   contextWindow?: number;
   maxInputTokens?: number;
   /** Model-scoped output-token ceiling; omitted when no authoritative value is known. */
