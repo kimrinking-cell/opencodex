@@ -105,7 +105,7 @@ describe("incomplete quota terminal attribution", () => {
   }
 });
 
-type ReporterPath = "parent-recorder" | "guarded-ws" | "native-sse";
+type ReporterPath = "parent-recorder" | "current-bun-sse" | "native-sse";
 
 // Drive the endpoint and its real transport/inspection owners. Only the external
 // Codex destination is redirected; the recorder and spawn health store stay real.
@@ -171,7 +171,7 @@ async function exerciseSpawnReporter(path: ReporterPath): Promise<void> {
   const options = (): HandleResponsesOptions => ({
     // Use the existing runtime seam: HTTP fixtures must not accidentally select
     // WS on a newer Bun, and the WS fixture must exercise the guarded relay.
-    codexWsRuntimeIdentity: path === "guarded-ws" ? "1.4.0" : "1.3.14",
+    codexWsRuntimeIdentity: path === "current-bun-sse" ? "1.4.0" : "1.3.14",
     recordTerminalOutcomes: path !== "parent-recorder",
     onCodexAuthContextResolved: context => { resolved.auth = context; },
     setTerminalOutcomeRecorder: recorder => { registered = recorder; },
@@ -280,7 +280,7 @@ async function exerciseSpawnReporter(path: ReporterPath): Promise<void> {
             });
             expect(response.status).toBe(200);
             expect(await response.text()).toContain('"status":"incomplete"');
-            expect(eager).toBe(path === "guarded-ws");
+            expect(eager).toBe(false);
           }
         };
         const [status] = await Promise.all([reported, deliver()]);
@@ -300,8 +300,8 @@ async function exerciseSpawnReporter(path: ReporterPath): Promise<void> {
         client = undefined;
       }
     }
-    expect(wsDispatches).toBe(path === "guarded-ws" ? 2 : 0);
-    expect(httpDispatches).toBe(path === "guarded-ws" ? 0 : 2);
+    expect(wsDispatches).toBe(0);
+    expect(httpDispatches).toBe(2);
   } finally {
     client?.close();
     await endpoint.stop(true);
@@ -324,8 +324,8 @@ describe("incomplete quota endpoint reporter wiring", () => {
     await exerciseSpawnReporter("parent-recorder");
   }, { timeout: SERVER_BUDGET_MS });
 
-  test("guarded native WS reporter updates spawn health only for quota incomplete", async () => {
-    await exerciseSpawnReporter("guarded-ws");
+  test("current Bun canonical SSE reporter updates spawn health only for quota incomplete", async () => {
+    await exerciseSpawnReporter("current-bun-sse");
   }, { timeout: SERVER_BUDGET_MS });
 
   // core always applies a field-backfill rewrite; win32 therefore forces eager
