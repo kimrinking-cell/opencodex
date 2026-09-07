@@ -78,19 +78,35 @@ export function shadowCallTargetsIntersect(
 /**
  * Decide whether a matching source model should use the opt-in intercept.
  *
- * Before Codex 0.147.0 this checked x-codex-turn-metadata and exempted
- * request_kind "turn". Codex 0.147.0 can label background helper calls as
- * "turn", causing them to bypass the intercept (#1684). The fix is to
- * intercept every configured shadow source model regardless of request kind.
- * A replacement intersecting the same provider+model source set remains a
- * no-op because rewriting it would only create self-interception (#2706).
+ * Luna is both a user-selectable model and Codex's helper model, so the model
+ * slug alone is not a sufficient signal. Preserve ordinary turns and intercept
+ * explicit maintenance kinds. Newer Codex clients can label feature-owned
+ * helper threads as `turn`; those remain distinguishable by `thread_source`.
+ * Missing/malformed metadata retains the legacy opt-in prefix behavior. A
+ * replacement intersecting the same provider+model source set remains a no-op
+ * because rewriting it would only create self-interception (#2706).
  */
 export function shouldInterceptShadowCall(
   modelId: string,
   configured: unknown,
   source: ShadowCallModelIdentity,
   target: ShadowCallModelIdentity,
+  headers: Headers,
 ): boolean {
-  return isShadowSourceModel(modelId, configured)
-    && !shadowCallTargetsIntersect(source, target);
+  if (!isShadowSourceModel(modelId, configured)) return false;
+  if (shadowCallTargetsIntersect(source, target)) return false;
+  const rawMetadata = headers.get("x-codex-turn-metadata");
+  if (rawMetadata === null) return true;
+
+  try {
+    const parsed = JSON.parse(rawMetadata) as { request_kind?: unknown; thread_source?: unknown };
+    if (parsed.request_kind !== "turn") return true;
+    if (typeof parsed.thread_source !== "string") return false;
+    return parsed.thread_source === "title"
+      || parsed.thread_source === "system"
+      || parsed.thread_source === "memory_consolidation"
+      || parsed.thread_source.startsWith("ambient");
+  } catch {
+    return true;
+  }
 }
