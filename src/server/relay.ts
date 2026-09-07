@@ -183,11 +183,16 @@ export type SseTerminalOutputBoundary = {
  * terminal, and drops every later block/byte. A premature [DONE] is held until
  * a terminal arrives so clean EOF can synthesize one terminal and one sentinel.
  */
-export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
+export function createSseTerminalOutputBoundary(options?: {
+  /** Keep relaying later same-socket Responses after a terminal event. */
+  keepAliveAfterTerminal?: boolean;
+}): SseTerminalOutputBoundary {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const framer = new BoundedSseFrameBuffer(MAX_INSPECTION_SSE_FRAME_BYTES);
+  const keepAliveAfterTerminal = options?.keepAliveAfterTerminal === true;
   let terminal = false;
+  let sawTerminal = false;
   let done = false;
   let pendingDone: { block: Uint8Array; delimiter: Uint8Array } | null = null;
   let disposed = false;
@@ -196,7 +201,7 @@ export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
   const processFrames = (
     frames: ReturnType<BoundedSseFrameBuffer["feed"]>,
   ): Uint8Array => {
-    if (disposed || terminal || frames.length === 0) return new Uint8Array(0);
+    if (disposed || (terminal && !keepAliveAfterTerminal) || frames.length === 0) return new Uint8Array(0);
     const output: Uint8Array[] = [];
     let responsesTerminal = false;
     for (const frame of frames) {
@@ -218,7 +223,7 @@ export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
         : frame.block;
       if (isDone) {
         done = true;
-        if (responsesTerminal) {
+        if (keepAliveAfterTerminal || responsesTerminal) {
           output.push(outboundBlock, frame.delimiter);
         } else if (!pendingDone) {
           // Do not expose a sentinel before a Responses terminal. If EOF
@@ -228,18 +233,19 @@ export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
         }
         continue;
       }
-      // Preserve every frame through the first Responses terminal. Every
-      // later non-DONE frame is dropped.
-      if (!responsesTerminal) output.push(outboundBlock, frame.delimiter);
+      // Preserve every frame through the first Responses terminal. Native same-socket
+      // transport opts into preserving later successor turns as well.
+      if (!responsesTerminal || keepAliveAfterTerminal) output.push(outboundBlock, frame.delimiter);
       if (!responsesTerminal && payload && terminalStatusFromParsed(parsed)) {
         responsesTerminal = true;
+        sawTerminal = true;
         if (pendingDone) {
           output.push(pendingDone.block, pendingDone.delimiter);
           pendingDone = null;
         }
       }
     }
-    if (responsesTerminal) {
+    if (responsesTerminal && !keepAliveAfterTerminal) {
       terminal = true;
       framer.dispose();
     }
@@ -248,7 +254,7 @@ export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
 
   return {
     feed(chunk) {
-      if (disposed || terminal) return new Uint8Array(0);
+      if (disposed || (terminal && !keepAliveAfterTerminal)) return new Uint8Array(0);
       return processFrames(framer.feed(chunk));
     },
     finish() {
@@ -263,7 +269,7 @@ export function createSseTerminalOutputBoundary(): SseTerminalOutputBoundary {
       const delimiter = encoder.encode(tailText.includes("\r\n") ? "\r\n\r\n" : "\n\n");
       return processFrames([{ block: tail, delimiter }]);
     },
-    terminalSeen: () => terminal,
+    terminalSeen: () => terminal || sawTerminal,
     doneSeen: () => done,
     upstreamError: () => upstreamError,
     dispose() {
@@ -287,11 +293,12 @@ export function relaySseWithFailedTail(
   body: ReadableStream<Uint8Array>,
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
-  opts?: { upstreamError?: string },
+  options?: { upstreamError?: string; keepAliveAfterTerminal?: boolean },
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
-  const terminalBoundary = createSseTerminalOutputBoundary();
+  const keepAliveAfterTerminal = options?.keepAliveAfterTerminal === true;
+  const terminalBoundary = createSseTerminalOutputBoundary({ keepAliveAfterTerminal });
   let closed = false;
   const relayChunk = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -299,7 +306,9 @@ export function relaySseWithFailedTail(
   ): "terminal" | "output" | "buffered" => {
     const outbound = terminalBoundary.feed(value);
     if (outbound.byteLength > 0) controller.enqueue(outbound);
-    if (!terminalBoundary.terminalSeen()) return outbound.byteLength > 0 ? "output" : "buffered";
+    if (!terminalBoundary.terminalSeen() || keepAliveAfterTerminal) {
+      return outbound.byteLength > 0 ? "output" : "buffered";
+    }
 
     // A Responses terminal frame is the protocol boundary. Some compatible
     // gateways leave the HTTP connection open after response.completed, which
@@ -334,7 +343,7 @@ export function relaySseWithFailedTail(
               // A clean upstream EOF is still a failed Responses turn when no
               // protocol terminal arrived. Make that state explicit so Codex
               // does not treat HTTP 200 + bare EOF as a retryable disconnect.
-              const upstreamError = terminalBoundary.upstreamError() ?? opts?.upstreamError;
+              const upstreamError = terminalBoundary.upstreamError() ?? options?.upstreamError;
               controller.enqueue(upstreamError === undefined
                 ? adapterEofIncompleteFrame(encoder)
                 : upstreamErrorTailFrame(encoder, upstreamError));

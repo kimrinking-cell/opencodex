@@ -60,7 +60,7 @@ import { activateLab, labActivationRequired } from "../lib/lab-activation";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
 import { runModelRenameStartupMigration } from "../providers/model-rename-startup";
-import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { StorageCleanupPolicy } from "../types";
 import { MAX_DECOMPRESSED_BODY_BYTES } from "./request-decompress";
@@ -185,6 +185,17 @@ import { handleChatCompletions } from "./chat-completions";
 import { anthropicErrorResponse } from "../claude/outbound";
 import { buildDesktop3pRegistry, generateDesktop3pModels } from "../claude/desktop-3p";
 import { buildDesktopDiscoveryInputs } from "../claude/desktop-discovery-inputs";
+import type { PreparedResponsesTransportContext } from "./responses/core";
+import {
+  clearNativeResponsesSessionStarting,
+  closeNativeResponsesSession,
+  markNativeResponsesSessionStarting,
+  nativeResponsesSessionFor,
+  nativeResponsesSessionStarting,
+  startNativeResponsesWsSession,
+  NATIVE_ASTRA_MODEL,
+  type NativeResponsesWsFactory,
+} from "./responses/ws-steering";
 import { runClaudeAuthModeMigration } from "../claude/auth-mode-migration";
 import {
   bindNativeMainStartupLifecycle,
@@ -585,6 +596,8 @@ export interface StartServerDeps {
   resolveServiceHomes?: typeof currentServiceHomes;
   /** Test-only seam for an upstream that cannot complete its WebSocket close handshake. */
   liveSidebandWebSocketFactory?: LiveSidebandWebSocketFactory;
+  /** Test-only seam for the native Astra Responses WebSocket transport. */
+  nativeAstraWebSocketFactory?: NativeResponsesWsFactory;
   /** Test-only seam; production derives a fresh local-attestation secret per process. */
   localAttestationSecret?: string;
   /** Optional readiness gate; a fresh pending gate is created when omitted. */
@@ -2248,8 +2261,38 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         } catch {
           return; // text-only contract; ignore unparseable frames
         }
+        const nativeSession = nativeResponsesSessionFor(ws);
+        if (nativeSession && nativeSession.handleClientFrame(frame)) {
+          markActivity(`ws ${typeof frame.type === "string" ? frame.type : "control"}`);
+          return;
+        }
         if (frame.type === "response.processed") return; // ack — no-op
+        if (frame.type === "response.steer") {
+          // Steering is a native upstream capability. Never silently discard it on the legacy
+          // HTTP/SSE bridge or while the prepared native handshake is still resolving.
+          const code = nativeResponsesSessionStarting(ws)
+            ? "steering_unavailable"
+            : "steering_unsupported";
+          sendJsonFrame(ws, {
+            type: "response.steer.failed",
+            error: {
+              code,
+              message: nativeResponsesSessionStarting(ws)
+                ? "Native Responses WebSocket is still preparing this turn"
+                : "response.steer is supported only on a native Astra Responses WebSocket turn",
+            },
+          });
+          return;
+        }
         if (frame.type !== "response.create") return;
+        if (nativeResponsesSessionStarting(ws)) {
+          sendJsonFrame(ws, buildWsErrorFrame(409, {
+            type: "invalid_request_error",
+            code: "response_active",
+            message: "A Responses WebSocket turn is still being prepared",
+          }));
+          return;
+        }
         markActivity("ws response.create");
 
         ws.data.cancel?.();
@@ -2290,6 +2333,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         const payload: Record<string, unknown> = { ...frame };
         delete payload.type;
         turnAdmissionLease.bindAbortController(turnAbort);
+        markNativeResponsesSessionStarting(ws);
         void (async () => {
           const start = Date.now();
           const requestId = nextRequestLogId(start);
@@ -2325,6 +2369,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
             const response = await handleResponses(req, config, logCtx, {
               ...(wsAdmission ? { admission: wsAdmission } : {}),
+              initialIngressFrame: payload,
               forceEmptyResponseId: true,
               inboundTransport: "websocket",
               abortSignal: turnAbort.signal,
@@ -2335,9 +2380,54 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
               setTerminalOutcomeRecorder: recorder => {
                 terminalRecorder = recorder;
               },
+              preparedRequestTransport: async (prepared: PreparedResponsesTransportContext) => {
+                if (
+                  prepared.inboundTransport !== "websocket"
+                  || prepared.route.modelId !== NATIVE_ASTRA_MODEL
+                  || !isCanonicalOpenAiForwardProvider(prepared.route.provider)
+                  || prepared.request.method.toUpperCase() !== "POST"
+                  || prepared.request.url !== `${CODEX_FORWARD_BASE_URL}/responses`
+                  || !prepared.turnAdmissionLease
+                ) return undefined;
+                const nativeResult = await startNativeResponsesWsSession({
+                  client: ws,
+                  request: {
+                    url: prepared.request.url,
+                    headers: prepared.request.headers,
+                    body: prepared.request.body,
+                  },
+                  initialIngressFrame: prepared.initialIngressFrame ?? payload,
+                  onCodexWsQuota: prepared.onCodexWsQuota,
+                  onInitialSend: prepared.onInitialSend,
+                  modelId: prepared.route.modelId,
+                  turnLease: prepared.turnAdmissionLease,
+                  acquireTurnLease: () => tryAdmitTurn(ws.data.sessionLaneId) ?? undefined,
+                  abortSignal: prepared.abortSignal,
+                  abortUpstream: reason => prepared.upstream.abort(reason),
+                  createWebSocket: deps.nativeAstraWebSocketFactory,
+                  connectTimeoutMs: prepared.connectTimeoutMs,
+                });
+                if (nativeResult.kind === "fallback") return undefined;
+                if (nativeResult.kind === "rejected") {
+                  return {
+                    response: formatErrorResponse(
+                      409,
+                      "invalid_request_error",
+                      "A native Responses WebSocket session is already active",
+                    ),
+                  };
+                }
+                return {
+                  response: nativeResult.response,
+                  hostObserved: nativeResult.hostObserved,
+                  keepAliveAfterTerminal: true,
+                };
+              },
             });
+            clearNativeResponsesSessionStarting(ws);
             await sendResponseToWebSocket(ws, response, isCurrent, {
               onSsePayload: payload => inspectResponseLogSsePayload(logCtx, payload),
+              keepAliveAfterTerminal: nativeResponsesSessionFor(ws) !== undefined,
               onTerminal: status => {
                 terminalRecorder?.(status, logCtx.terminalHttpStatus);
                 finalizeLog(httpStatusForRequestLogTerminal(status, logCtx), {
@@ -2372,6 +2462,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
               /* socket already gone or send dropped */
             }
           } finally {
+            clearNativeResponsesSessionStarting(ws);
             turnAdmissionLease.release();
             if (!logged && turnAbort.signal.aborted) finalizeLog(499);
             if (ws.data.cancel === cancelTurn) ws.data.cancel = undefined;
@@ -2383,6 +2474,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           closeLiveSideband(ws);
           return;
         }
+        closeNativeResponsesSession(ws, 1000, "client closed");
         unregisterCodexWebSocket(ws);
         ws.data.admissionLease?.release();
         ws.data.admissionLease = undefined;
