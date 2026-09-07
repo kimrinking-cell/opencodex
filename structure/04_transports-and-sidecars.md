@@ -109,6 +109,34 @@ the upstream HTTP-version helper. Server, provider, and WebSocket data types rem
 It must not import routing, combos, OAuth, adapters, sidecars, response parsing, logging, or relay
 modules merely because those imports existed in the pre-split `responses.ts` monolith.
 
+### Native Astra Responses WebSocket stage
+
+The native Astra path is a transport override inside canonical `handleResponses` preparation. The
+canonical handler remains responsible for route selection, context/session and account binding,
+credential resolution, request/tool normalization, admission, outcomes, quota bookkeeping, and
+cleanup. Only the prepared canonical request is handed to the transport stage, which opens one
+upstream Responses WebSocket for the create, steering, cancellation, and any automatic continuation.
+
+The stage relays `response.steer.accepted`, `response.steer.pending`, `response.steer.failed`, the
+steered `response.incomplete`, and the successor `response.created`/output/completed events through
+the existing SSE inspection and WebSocket framing. A terminal event for the first response does not
+close this native stream when the upstream keeps the session alive. Unsupported shapes decline before
+send and retain the existing HTTP/SSE provider behavior with an explicit steering error. Once the
+native socket opens or a send is ambiguous, the proxy fails closed: it does not replay the request as
+HTTP/SSE or switch accounts. This stage documents the proxy transport only; it is not an installed
+Desktop/App runtime replacement.
+
+The initial prepared request is the only `handleResponses` preparation pass. Later same-socket
+`response.create` frames carry the native client's repeated settings plus a new
+`previous_response_id`/`input`. The proxy validates those settings against the original ingress
+frame and sends the corresponding values from the already-canonicalized first request, preserving
+the initial authenticated account, context binding, route, and adapter contract on the socket.
+Function-call and custom-tool output items are accepted as native input; stable session/thread/turn
+metadata remains pinned and only an explicit trace-metadata allowlist may refresh. A frame that asks
+for a changed tool, instruction, route, account, context, or other non-trace option is rejected with
+an explicit preparation error; it is not forwarded as an untransformed provider request. A fresh
+canonical request is required for that change.
+
 ### Semantic progress ownership
 
 The Responses proxy does not treat transcript growth as repository progress. It can observe request
