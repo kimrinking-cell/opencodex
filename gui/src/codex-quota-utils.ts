@@ -1,7 +1,7 @@
 export interface AccountQuota {
   weeklyPercent?: number;
   fiveHourPercent?: number;
-  /** Codex account API aliases for the same five-hour window. */
+  /** Codex WHAM sub-day window; only 18,000 seconds is rendered as the 5-hour limit. */
   shortPercent?: number;
   monthlyPercent?: number;
   weeklyResetAt?: number;
@@ -37,7 +37,9 @@ export function isThirtyDayOnlyPlan(plan: string | null | undefined): boolean {
 
 export function normalizeQuotaForPlan(quota: AccountQuota | null, plan: string | null | undefined): AccountQuota | null {
   if (!quota) return null;
-  const normalized = quota.shortPercent === undefined && quota.shortResetAt === undefined
+  const aliasesFiveHour = (quota.shortPercent !== undefined || quota.shortResetAt !== undefined)
+    && (quota.shortWindowSeconds === undefined || quota.shortWindowSeconds === 5 * 60 * 60);
+  const normalized = !aliasesFiveHour
     ? quota
     : {
         ...quota,
