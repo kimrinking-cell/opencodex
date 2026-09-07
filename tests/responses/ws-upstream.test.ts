@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
-import { providerFetch } from "../../src/server/responses/fetch-helpers";
+import { CODEX_WS_UPSTREAM_ENABLED, providerFetch } from "../../src/server/responses/fetch-helpers";
 import { handleResponses } from "../../src/server/responses";
 import { isEagerRelaySseResponse } from "../../src/server/relay";
 import { isWin32EagerRewrite } from "../../src/lib/bun-stream-caps";
@@ -260,7 +260,7 @@ describe("providerFetch routing", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  test("routes eligible Codex streaming turns to WS and everything else to the base fetch", async () => {
+  test("pins eligible Codex streaming turns and all other requests to the base HTTP fetch", async () => {
     installFake(ws => {
       ws.emit("open", {});
       ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: {} }) });
@@ -275,11 +275,9 @@ describe("providerFetch routing", () => {
     } as unknown as OcxProviderConfig;
     const wrapped = providerFetch(provider, BOUNDED_WS_RUNTIME);
 
-    // Eligible: WS adapter serves it, base fetch untouched.
-    const wsResponse = await wrapped(CODEX_URL, streamingInit());
-    expect(wsResponse.headers.get("content-type")).toContain("text/event-stream");
-    expect(baseCalls).toHaveLength(0);
-    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(CODEX_WS_UPSTREAM_ENABLED).toBe(false);
+    // Even a WS-capable stable runtime follows the canonical HTTP/SSE policy.
+    expect(await wrapped(CODEX_URL, streamingInit())).toBeInstanceOf(Response);
 
     // Non-streaming body: base fetch.
     await wrapped(CODEX_URL, { method: "POST", body: JSON.stringify({ model: "m" }) });
@@ -287,8 +285,8 @@ describe("providerFetch routing", () => {
     await wrapped("https://api.openai.com/v1/responses", streamingInit());
     // Request-object input: base fetch (WS path only handles string URLs).
     await wrapped(new Request(CODEX_URL, streamingInit() as RequestInit));
-    expect(baseCalls).toHaveLength(3);
-    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(baseCalls).toHaveLength(4);
+    expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
   test("routes an opt-in provider's Responses streams over its upstream WS", async () => {
@@ -345,27 +343,7 @@ describe("handleResponses Codex WS relay selection", () => {
     });
   }
 
-  test("a successful WS upgrade bypasses the configured legacy tee path", async () => {
-    installFake(ws => {
-      ws.emit("open", {});
-      ws.emit("message", {
-        data: JSON.stringify({ type: "response.completed", response: { id: "r1", status: "completed", output: [] } }),
-      });
-    });
-
-    const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" }, {
-      codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
-    });
-
-    expect(response.status).toBe(200);
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(isEagerRelaySseResponse(response)).toBe(true);
-    const text = await response.text();
-    expect(text).toContain("response.completed");
-    expect(text).toContain("data: [DONE]");
-  });
-
-  test("an HTTP fallback remains on the configured legacy tee path", async () => {
+  test("a WS-capable runtime stays on the configured HTTP SSE path", async () => {
     installFake(ws => ws.close());
     globalThis.fetch = (async () => new Response(
       `event: response.completed\ndata: ${JSON.stringify({
@@ -379,33 +357,10 @@ describe("handleResponses Codex WS relay selection", () => {
       codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
     });
 
-    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(response.status).toBe(200);
+    expect(FakeWebSocket.instances).toHaveLength(0);
     expect(isEagerRelaySseResponse(response)).toBe(EAGER_RELAY_FORCED_BY_PLATFORM);
     expect(await response.text()).toContain("response.completed");
-  });
-
-  test("a WS queue overflow fails closed through the bounded eager relay", async () => {
-    const delta = "x".repeat(Math.floor(MAX_CODEX_WS_QUEUE_BYTES / 3));
-    installFake(ws => {
-      ws.emit("open", {});
-      for (let index = 0; index < 4; index += 1) {
-        ws.emit("message", {
-          data: JSON.stringify({ type: "response.output_text.delta", delta, index }),
-        });
-      }
-    });
-
-    const logCtx = { model: "", provider: "" };
-    const response = await handleResponses(request(), forwardConfig(), logCtx, {
-      codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
-    });
-
-    expect(isEagerRelaySseResponse(response)).toBe(true);
-    const text = await response.text();
-    expect(text).toContain("event: response.failed");
-    expect(text).toContain("data: [DONE]");
-    expect(logCtx.activeAttempt?.streamAborted).toBe(true);
-    expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
 
   test.skipIf(bunSupportsBoundedCodexWsRelay())(
@@ -489,21 +444,18 @@ describe("isWin32EagerRewrite", () => {
 });
 
 describe("codexWsUpstreamFetch", () => {
-  test("the complete HTTP adapter dispatch maps Lite and final routing intent onto the actual WS", async () => {
-    const frames: Record<string, unknown>[] = [];
-    const seenHeaders: Record<string, string>[] = [];
-    class CapturingSocket extends FakeWebSocket {
-      constructor(url: string, options?: { headers?: Record<string, string> }) {
-        super(url);
-        seenHeaders.push(options?.headers ?? {});
-      }
-      send(data: string) { super.send(data); frames.push(JSON.parse(data)); }
-    }
-    FakeWebSocket.script = ws => {
-      ws.emit("open", {});
-      ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1", status: "completed", output: [] } }) });
-    };
-    globalThis.WebSocket = CapturingSocket as unknown as typeof WebSocket;
+  test("the complete HTTP adapter dispatch maps Lite and final routing intent onto HTTP SSE", async () => {
+    let seenHeaders = new Headers();
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      seenHeaders = new Headers(init?.headers);
+      return new Response(
+        `event: response.completed\ndata: ${JSON.stringify({
+          type: "response.completed",
+          response: { id: "r1", status: "completed", output: [] },
+        })}\n\n`,
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }) as typeof fetch;
     const response = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { authorization: "Bearer fixture", "content-type": "application/json", "x-openai-internal-codex-responses-lite": "true" },
@@ -512,9 +464,9 @@ describe("codexWsUpstreamFetch", () => {
       defaultProvider: "openai", providers: { openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex" } },
     } as OcxConfig, { model: "", provider: "" }, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME });
     await response.text();
-    expect(frames).toHaveLength(1);
-    expect(frames[0].client_metadata).toEqual({ ws_request_header_x_openai_internal_codex_responses_lite: "true" });
-    expect(seenHeaders[0]["x-codex-routing-hint"]).toBe("model=gpt-5.5;tier=priority");
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(seenHeaders.get("x-openai-internal-codex-responses-lite")).toBe("true");
+    expect(seenHeaders.get("x-codex-routing-hint")).toBe("model=gpt-5.5;tier=priority");
   });
 
   test("projects canonical WS prelude into the HTTP response before committing headers", async () => {
