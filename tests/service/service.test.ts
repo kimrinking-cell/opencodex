@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, posix, win32 } from "node:path";
@@ -3751,6 +3751,7 @@ describe("service definitions are not world-readable", () => {
     try {
       const path = join(dir, "plist");
       writeFileSync(path, "stale", { encoding: "utf8", mode: 0o644 });
+      chmodSync(path, 0o644);
       expect(modeOf(path)).toBe("644");
 
       writeServiceDefinitionFile(path, buildPlist(resolvedProxyEnv({})), "utf8");
