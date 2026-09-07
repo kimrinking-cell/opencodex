@@ -26,6 +26,12 @@ export type ContextFailureClassification =
 
 export type ContextFailureEvidenceStatus = "observed" | "unverified";
 
+interface BackendFailureDetails {
+  backend_error_kind?: "http" | "timeout" | "connection" | "network" | "build" | "retry_limit";
+  backend_http_status?: number;
+  backend_elapsed_ms?: number;
+}
+
 export interface ContextFailureReportResult {
   recorded: boolean;
   duplicate: boolean;
@@ -44,6 +50,7 @@ interface RolloutEvidence {
   nativeCheckpointWrites: number;
   ambiguousNotesCalls: number;
   backendErrors: number;
+  latestBackendError?: BackendFailureDetails;
   invalidArguments: number;
   /** A native write is evidence that an attempt happened, not proof of persistence. */
   checkpointWriteObserved: boolean;
@@ -51,7 +58,7 @@ interface RolloutEvidence {
   nativeNotesCallIds: Set<string>;
 }
 
-interface ReportEvidenceFields {
+interface ReportEvidenceFields extends BackendFailureDetails {
   classification?: ContextFailureClassification;
   evidence_status?: ContextFailureEvidenceStatus;
   backend_error_observed?: boolean;
@@ -210,10 +217,21 @@ function invalidNotesArguments(payload: Record<string, unknown>): boolean {
   }
 }
 
-function backendFailureOutput(payload: Record<string, unknown>): boolean {
-  if (payload.type !== "function_call_output") return false;
+function backendFailureOutput(payload: Record<string, unknown>): BackendFailureDetails | null {
+  if (payload.type !== "function_call_output") return null;
   // The native path emits a plain string. Do not infer from encrypted or structured output.
-  return payload.output === BACKEND_REQUEST_FAILURE;
+  if (payload.output === BACKEND_REQUEST_FAILURE) return {};
+  if (typeof payload.output !== "string" || payload.output.length > 256
+    || !payload.output.startsWith(BACKEND_REQUEST_FAILURE)) return null;
+  const detail = /^ \[kind=(http|timeout|connection|network|build|retry_limit)(?: status=([1-5][0-9]{2}))? elapsed_ms=([0-9]{1,12})\]$/.exec(
+    payload.output.slice(BACKEND_REQUEST_FAILURE.length),
+  );
+  if (!detail || (detail[1] === "http") !== (detail[2] !== undefined)) return null;
+  return {
+    backend_error_kind: detail[1] as BackendFailureDetails["backend_error_kind"],
+    ...(detail[2] === undefined ? {} : { backend_http_status: Number(detail[2]) }),
+    backend_elapsed_ms: Number(detail[3]),
+  };
 }
 
 function emptyRolloutEvidence(status: ContextFailureEvidenceStatus = "unverified"): RolloutEvidence {
@@ -286,7 +304,12 @@ function considerRolloutLine(
     && Math.abs(now - windowAnchor.timestamp) <= RECENT_EVIDENCE_MS;
   const currentOrRecent = anchored || recent;
   if (invalidNotesArguments(payload) && currentOrRecent) evidence.invalidArguments += 1;
-  if (backendFailureOutput(payload) && currentOrRecent) evidence.backendErrors += 1;
+  const backendError = currentOrRecent ? backendFailureOutput(payload) : null;
+  if (backendError) {
+    evidence.backendErrors += 1;
+    // A later legacy error has no details; never attach a previous call's status to it.
+    evidence.latestBackendError = backendError;
+  }
 }
 
 /**
@@ -348,6 +371,7 @@ function reportEvidenceFor(input: ContextFailureInput, evidence: RolloutEvidence
   if (evidence.backendErrors > 0) {
     fields.classification = "backend_error";
     fields.backend_error_observed = true;
+    Object.assign(fields, evidence.latestBackendError);
   }
   if (evidence.invalidArguments > 0) {
     if (!fields.classification) fields.classification = "tool_argument_error";
