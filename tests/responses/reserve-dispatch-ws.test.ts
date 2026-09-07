@@ -263,12 +263,14 @@ describe("synchronous Reserve dispatch callbacks on WebSocket", () => {
     let constructed!: (socket: DelayedWebSocket) => void;
     const created = new Promise<DelayedWebSocket>(resolve => { constructed = resolve; });
     DelayedWebSocket.constructed = constructed;
+    const gatewayUrl = "https://gateway.example/v1/responses";
     const provider: OcxProviderConfig & { fetch: typeof fetch } = {
-      adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex",
+      adapter: "openai-responses", authMode: "forward", baseUrl: "https://gateway.example/v1",
+      upstreamWebsocket: true,
       fetch: Object.assign(async () => { httpSends += 1; return new Response("unexpected"); }, { preconnect() {} }),
     };
     const executor = providerFetch(provider, "1.4.0", { beforeDispatch: () => { if (!permitted) throw refusal; } });
-    const pending = executor(URL, init());
+    const pending = executor(gatewayUrl, init());
     const observed = pending.then(
       () => ({ status: "fulfilled" as const }),
       (error: unknown) => ({ status: "rejected" as const, error }),
