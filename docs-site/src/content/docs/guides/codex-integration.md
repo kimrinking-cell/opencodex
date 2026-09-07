@@ -20,6 +20,14 @@ plus `openai-apikey/<model>` for the configured API key. Pool includes main plus
 Direct uses only the caller/main bearer. The routes do not fall back to one another. Shipped v1
 configs migrate to marker 2 and preserve `config.json.pre-openai-tiers-v2.bak` for manual restore.
 
+## GPT context management (experimental)
+
+Use the **GPT context management (experimental)** toggle at the top of **Codex settings → Multi-auth**. It saves `gptContextManagement` through `/api/settings` and refreshes the model catalog without restarting the proxy.
+
+When enabled, native Sol and Astra use History/Notes across context resets, with each task bound to its original account. When disabled, new tasks use standard context compaction and normal account routing.
+
+Reopen Codex and start a new task after changing the setting. Disabling it can interrupt existing History/Notes tasks; it does not migrate their history to another account.
+
 ## Config injection
 
 `ocx init`, `ocx start`, and `ocx sync` call the injector. On the default loopback bind, it keeps

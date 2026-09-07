@@ -5,6 +5,7 @@ import DefaultModeRequestUserInputSetting from "../components/DefaultModeRequest
 import UltraFastTierSetting from "../components/UltraFastTierSetting";
 import MainAccountHardLockSetting from "../components/MainAccountHardLockSetting";
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
+import GptContextManagementSetting from "../components/GptContextManagementSetting";
 import CodexAccountPickerSetting from "../components/CodexAccountPickerSetting";
 import { codexAccountModeState, type CodexAccountModeState } from "../codex-multi-state";
 import { navigateHash } from "../hash-routing";
@@ -208,6 +209,7 @@ function CodexSetMultiauthForProxy({ apiBase }: { apiBase: string }) {
 
   return (
     <>
+      <GptContextManagementSetting apiBase={apiBase} />
       <CodexAccountPool
         apiBase={apiBase}
         controller={poolController}

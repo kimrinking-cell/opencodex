@@ -7,6 +7,14 @@ opencodex는 Codex가 읽는 두 가지, 즉 설정(`$CODEX_HOME/config.toml`, �
 
 프록시는 bare `openai` Codex 로그인 경로 하나와 Pool(기본) 및 Direct 계정 모드, 그리고 설정된 API 키용 `openai-apikey/<model>`을 제공합니다. Pool은 메인 계정과 추가된 계정을 포함하고, Direct는 호출자/메인 bearer만 사용합니다. 경로들은 서로 fallback하지 않습니다. shipped v1 config는 marker 2로 이관되며, 수동 복원을 위해 `config.json.pre-openai-tiers-v2.bak`를 보존합니다.
 
+## GPT 컨텍스트 관리 (실험)
+
+**Codex 설정 → 다중 인증** 화면 위쪽의 **GPT 컨텍스트 관리 (실험)** 토글로 켜고 끕니다. `/api/settings`를 통해 `gptContextManagement`를 저장하고 프록시 재시작 없이 모델 카탈로그를 갱신합니다.
+
+켜면 네이티브 Sol·Astra가 컨텍스트 초기화 후 History/Notes로 작업을 이어가며 각 작업은 원래 계정에 고정됩니다. 끄면 새 작업은 일반 컨텍스트 압축과 기본 계정 전환 방식을 사용합니다.
+
+변경 후 Codex를 다시 열고 새 작업을 시작하세요. 끄면 진행 중인 History/Notes 작업이 중단될 수 있으며, 기존 기록이 다른 계정으로 이전되지는 않습니다.
+
 ## 설정 주입
 
 `ocx init`, `ocx start`, `ocx sync`는 모두 인젝터를 호출합니다. 기본 loopback 바인드에서는 Codex의 빌트인 `openai` 프로바이더 id를 그대로 유지한 채, 그 프로바이더가 opencodex를 바라보게 합니다.

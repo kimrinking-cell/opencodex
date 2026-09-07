@@ -1640,6 +1640,7 @@ dialog.modal-overlay::backdrop {
 .codex-ultrafast-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
 .codex-ultrafast-feedback.is-error { color: var(--red); }
 .codex-account-picker-card { gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+.gpt-context-management-card { margin-bottom: var(--space-4); }
 .codex-auth-advanced { margin-top: 8px; }
 .codex-auth-advanced__toggle {
   display: flex;
