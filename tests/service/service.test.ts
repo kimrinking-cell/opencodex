@@ -4016,6 +4016,7 @@ describe("service definitions are not world-readable", () => {
     try {
       const path = join(dir, "plist");
       writeFileSync(path, "stale", { encoding: "utf8", mode: 0o644 });
+      chmodSync(path, 0o644);
       expect(modeOf(path)).toBe("644");
 
       writeServiceDefinitionFile(path, buildPlist(resolvedProxyEnv({})), "utf8");
