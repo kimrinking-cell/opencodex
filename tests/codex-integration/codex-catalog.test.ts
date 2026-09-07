@@ -6,7 +6,7 @@ import { codexAccountGatedCanonicalWireModel } from "../../src/server/responses/
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../src/codex/catalog/native-models";
 import { isGpt56NativeSlug } from "../../src/codex/catalog/effort";
 import { nativeOpenAiContextTier, nativeOpenAiMaxInputTokens } from "../../src/codex/catalog";
-import { shouldUpgradeToUpstreamEntry } from "../../src/codex/catalog/metadata";
+import { normalizeNativeOpenAiReasoningLevels, shouldUpgradeToUpstreamEntry } from "../../src/codex/catalog/metadata";
 import { applyNativeVisibility, augmentRoutedModelsWithMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, CODEX_ACCOUNT_BOUND_CATALOG_KIND, CODEX_NATIVE_ALIAS_CATALOG_KIND, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_DAYBREAK_BLUE_MODEL, NATIVE_GPT6_ASTRA_MODEL, NATIVE_OPENAI_MODELS, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiCapabilitySourceSlug, nativeOpenAiContextWindow, nativeReasoningEfforts, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, resolveComboCatalogMember, shouldExposeRoutedModel, upstreamNativeEntry } from "../../src/codex/catalog";
 import { applyProviderConfigHints, fetchProviderModels, mergeConfiguredModelsIntoLiveCatalog } from "../../src/codex/catalog/provider-fetch";
 import {
@@ -3775,12 +3775,11 @@ describe("Codex catalog routed normalization", () => {
     // 272k window is the over-advertising that clamp exists to prevent.
     expect(nativeOpenAiMaxInputTokens(NATIVE_GPT6_ASTRA_MODEL)).toBe(272_000);
     expect(nativeReasoningEfforts(NATIVE_GPT6_ASTRA_MODEL))
-      .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(nativeDefaultReasoningEffort(NATIVE_GPT6_ASTRA_MODEL)).toBe("low");
     expect(NATIVE_OPENAI_MODELS).toContain(NATIVE_GPT6_ASTRA_MODEL);
 
-    // The full 5.6-era ladder is what the sync path keys on. Without this, catalog sync takes
-    // the else-branch and truncates the shipped ladder at xhigh, dropping max and ultra.
+    // Exact-ladder handling neither truncates Astra at xhigh nor appends synthetic ultra.
     expect(isGpt56NativeSlug(NATIVE_GPT6_ASTRA_MODEL)).toBe(true);
 
     const projected = buildCatalogEntries(
@@ -3800,6 +3799,10 @@ describe("Codex catalog routed normalization", () => {
     );
     expect(projected.filter(entry => entry.slug === NATIVE_GPT6_ASTRA_MODEL)).toHaveLength(1);
     expect(projected.filter(entry => entry.slug === `main/${NATIVE_GPT6_ASTRA_MODEL}`)).toHaveLength(1);
+    for (const entry of projected.filter(entry => String(entry.slug).endsWith(NATIVE_GPT6_ASTRA_MODEL))) {
+      expect((entry.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+        .toEqual(["low", "medium", "high", "xhigh", "max"]);
+    }
 
     // Its own shipped identity. Cross-checked against the upstream checkout below when present;
     // these literals are the values that checkout carries at ed391d4dd.
@@ -3809,6 +3812,18 @@ describe("Codex catalog routed normalization", () => {
       context_window: 272_000,
       max_context_window: 872_000,
     });
+    expect((upstreamNativeEntry(NATIVE_GPT6_ASTRA_MODEL)?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
+
+    const persisted = normalizeNativeOpenAiReasoningLevels({
+      slug: NATIVE_GPT6_ASTRA_MODEL,
+      supported_reasoning_levels: [
+        { effort: "low" }, { effort: "medium" }, { effort: "high" },
+        { effort: "xhigh" }, { effort: "max" }, { effort: "ultra" },
+      ],
+    } as never);
+    expect((persisted.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
 
     // Widening the pinned-entry lookup must not admit the other pinned slugs: UPSTREAM_NATIVE_ENTRIES
     // also authorizes replacing persisted rows during sync, which stays reserved for the 5.6 family
@@ -3937,7 +3952,7 @@ describe("Codex catalog routed normalization", () => {
     expect(model).toMatchObject({
       displayName: "GPT-6-Astra",
       codexForwardNativeCapabilityAlias: true,
-      reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
     });
 
     const entries = buildCatalogEntries(nativeTemplate(), [], models);
@@ -3946,6 +3961,8 @@ describe("Codex catalog routed normalization", () => {
       display_name: "GPT-6-Astra", multi_agent_reasoning_effort: "xhigh",
       service_tiers: [{ id: "priority", name: "Fast", description: "2x speed, increased usage" }],
     });
+    expect((astra?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(astra?.base_instructions).toContain("powered by the gpt-6-astra");
     expect(astra?.base_instructions).not.toContain("daybreak");
   });
@@ -3958,13 +3975,13 @@ describe("Codex catalog routed normalization", () => {
     expectedDefault?: string;
   }> = [
     { name: "legacy sentinels", efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"], defaultEffort: "minimal", expected: ["low", "medium", "high", "xhigh", "max"], expectedDefault: "low" },
-    { name: "native default", expected: ["low", "medium", "high", "xhigh", "max", "ultra"], expectedDefault: "low" },
+    { name: "native default", expected: ["low", "medium", "high", "xhigh", "max"], expectedDefault: "low" },
     { name: "empty declaration", efforts: [], defaultEffort: "minimal", expected: [] },
     { name: "no compatible rung", efforts: ["none", "minimal"], defaultEffort: "minimal", expected: ["low"], expectedDefault: "low" },
     { name: "narrow subset", efforts: ["low"], defaultEffort: "high", expected: ["low"], expectedDefault: "low" },
     { name: "valid explicit default", efforts: ["high", "medium", "high"], defaultEffort: "high", expected: ["medium", "high"], expectedDefault: "high" },
     { name: "first survivor default", efforts: ["high", "medium"], defaultEffort: "minimal", expected: ["medium", "high"], expectedDefault: "medium" },
-    { name: "Ultra mode", efforts: ["minimal", "ultra"], defaultEffort: "minimal", expected: ["ultra"], expectedDefault: "ultra" },
+    { name: "unsupported Ultra mode", efforts: ["minimal", "ultra"], defaultEffort: "minimal", expected: ["low"], expectedDefault: "low" },
   ];
 
   test.each(nativeCustomEffortCases)("canonical custom Astra bounds $name through gather/build/merge", async fixture => {
