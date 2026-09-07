@@ -76,8 +76,20 @@ export function identifyRoutedModel(systemText: string, modelName: string): stri
   const replacement = identity
     ? `You are a coding agent powered by the ${identity}. If asked which model you are, identify as ${identity}. Do not claim to be a different model or to have a different creator.`
     : "You are a coding agent powered by the configured model. If asked which model you are, identify as configured model. Do not claim to be GPT-5 or made by OpenAI.";
-  return systemText.replace(CODEX_GPT5_IDENTITY_RE, () => replacement);
+  const identified = systemText.replace(CODEX_GPT5_IDENTITY_RE, () => replacement);
+  return sanitizeRoutedInstructions(identified, modelName);
 }
 
 /** The catalog (static, on-disk) replacement for `base_instructions`. Same neutral wording. */
 export const NEUTRAL_IDENTITY_CATALOG = NEUTRAL_IDENTITY_LINE;
+
+/** Remove narrowly identified Codex-host operational prose from third-party routed prompts. */
+export function sanitizeRoutedInstructions(systemText: string, modelName: string): string {
+  if (!modelName.includes("/")) return systemText;
+  return systemText
+    .split("\n")
+    .filter(line => !/(?:provide|send|share).*updates?.*(?:every|within).*\b(?:30|60)\s*seconds?\b/i.test(line))
+    .filter(line => !/commentary.*(?:every|each).*tool|(?:each|every).*tool.*commentary/i.test(line))
+    .filter(line => !/^\s*#{1,6}\s*(?:plugins?|apps?)\s*$/i.test(line))
+    .join("\n");
+}
