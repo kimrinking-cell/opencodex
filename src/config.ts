@@ -1257,6 +1257,7 @@ const configSchema = z.object({
   multiAgentGuidanceEnabled: z.boolean().optional(),
   // Invalid optional recovery config must not discard unrelated provider/account state.
   agentTaskRecovery: agentTaskRecoverySchema.optional().catch(undefined),
+  gptContextManagement: z.boolean().optional().catch(undefined),
   // Same rationale: a bad notify section must not cost the operator their providers.
   quotaResetNotify: quotaResetNotifySchema.optional().catch(undefined),
   // These selections pre-date schema validation and used to pass through as
