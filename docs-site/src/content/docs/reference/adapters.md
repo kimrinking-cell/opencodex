@@ -36,6 +36,13 @@ remain invalid. Ordinary function/custom tool results still require a nonempty
 `call_id`. The envelope metadata identifies a compatibility shape and grants no
 additional permissions. Native passthrough and compaction retain their raw-body rules.
 
+## Context-recovery diagnostics
+
+The Sol/Astra context self-report stores only redacted metadata and keeps recovery claims
+unverified; `[context-relay]` failures record phase/status/elapsed/abort flags only. A timed-out
+Notes append may already have committed upstream, so read back before retrying and keep task
+recovery separate from checkpoint persistence.
+
 ## `openai-chat`
 
 **Targets:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`; a trailing `/chat/completions` or `/` on `baseUrl` is stripped first) and every compatible

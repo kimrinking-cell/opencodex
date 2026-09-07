@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { formatErrorResponse } from "../bridge";
 import {
   assertContextAccountIdentity, contextSessionFromBody, gptContextManagementEnabled,
@@ -30,6 +31,24 @@ export interface ContextRelayDependencies {
   resolveAuth?: typeof resolveCodexAuthContext;
   materializeAuth?: typeof materializeCodexUpstreamAuthAsync;
   fetch?: typeof fetch;
+  deadline?: typeof signalWithTimeout;
+  observeFailure?: (event: ContextRelayFailure) => void;
+}
+
+/** Bounded operational metadata only; never backend text, headers, or note contents. */
+export interface ContextRelayFailure {
+  event: "context_relay_failure";
+  operation: string;
+  context_tag: string;
+  phase: "resolve_auth" | "materialize_auth" | "upstream_headers" | "upstream_body";
+  kind: "authentication" | "account_unavailable" | "client_canceled" | "deadline" | "transport" | "upstream_http" | "redirect" | "response_size" | "response_type";
+  status: number;
+  upstream_status: number | null;
+  elapsed_ms: number;
+  deadline_ms: number;
+  client_aborted: boolean;
+  relay_aborted: boolean;
+  write_outcome: "not_applicable" | "not_sent" | "unknown";
 }
 
 /** Opaque native protocol: never log bodies, decrypt output, retry writes, or choose a new account. */
@@ -60,10 +79,33 @@ export async function handleContextManagement(
     if (path === "/v1/alpha/notes/v2/thread_hint") return Response.json({ text: "" });
     return formatErrorResponse(409, "context_account_unbound", "No GPT context request has established this session's account");
   }
-  const linked = signalWithTimeout(35_000, req.signal);
+  const started = performance.now();
+  const linked = (dependencies.deadline ?? signalWithTimeout)(35_000, req.signal);
   let auth: CodexAuthContext | undefined;
   let response: Response | undefined;
   let accountReady = false;
+  let phase: ContextRelayFailure["phase"] = "resolve_auth";
+  let sent = false;
+  const isWrite = path.endsWith("/append_to_file") || path.endsWith("/write_file");
+  const observe = (kind: ContextRelayFailure["kind"], status: number) => {
+    const event: ContextRelayFailure = {
+      event: "context_relay_failure", operation: path.slice(4),
+      context_tag: createHash("sha256").update(sessionId).digest("hex").slice(0, 16),
+      phase, kind, status, upstream_status: response?.status ?? null,
+      elapsed_ms: Math.round(performance.now() - started), deadline_ms: 35_000,
+      // kind preserves the selected response mapping, not which deadline won a race.
+      client_aborted: req.signal.aborted, relay_aborted: linked.signal.aborted,
+      write_outcome: !isWrite ? "not_applicable" : sent ? "unknown" : "not_sent",
+    };
+    try {
+      if (dependencies.observeFailure) dependencies.observeFailure(event);
+      else console.warn(`[context-relay] ${JSON.stringify(event)}`);
+    } catch { /* Diagnostics must never alter the opaque relay result. */ }
+  };
+  const failure = (status: number, code: string, message: string, kind: ContextRelayFailure["kind"]) => {
+    observe(kind, status);
+    return formatErrorResponse(status, code, message);
+  };
   try {
     auth = binding.kind === "caller" ? { kind: "main", accountId: null }
       : await (dependencies.resolveAuth ?? resolveCodexAuthContext)(req.headers, config, "pool", {
@@ -72,8 +114,9 @@ export async function handleContextManagement(
         signal: linked.signal,
       });
     if (!isCodexAuthContextUsable(auth, config)) {
-      return formatErrorResponse(401, "authentication_error", "The original context account needs authentication");
+      return failure(401, "authentication_error", "The original context account needs authentication", "authentication");
     }
+    phase = "materialize_auth";
     const headers = await (dependencies.materializeAuth ?? materializeCodexUpstreamAuthAsync)(req.headers, auth, { signal: linked.signal });
     assertContextAccountIdentity(binding, headers);
     accountReady = true;
@@ -83,22 +126,26 @@ export async function handleContextManagement(
       if (value !== null) headers.set(name, value);
     }
     const url = `${config.providers.openai!.baseUrl.replace(/\/+$/, "")}/${path.slice(4)}`;
+    phase = "upstream_headers";
+    sent = true;
     response = await (dependencies.fetch ?? fetch)(url, {
       method: "POST", headers, body: JSON.stringify(body), signal: linked.signal, redirect: "manual",
     });
     if (response.status >= 300 && response.status < 400) {
-      return formatErrorResponse(502, "upstream_error", "Context backend redirect was refused");
+      return failure(502, "upstream_error", "Context backend redirect was refused", "redirect");
     }
+    phase = "upstream_body";
     const observed = await readBoundedResponseBytes(response, { maxBytes: 4 * 1024 * 1024, signal: linked.signal });
-    if (observed.oversized) return formatErrorResponse(502, "upstream_error", "Context backend response exceeded its size limit");
+    if (observed.oversized) return failure(502, "upstream_error", "Context backend response exceeded its size limit", "response_size");
     const contentType = response.headers.get("content-type") ?? "";
-    if (!contentType.includes("application/json")) return formatErrorResponse(502, "upstream_error", "Context backend did not return JSON");
+    if (!contentType.includes("application/json")) return failure(502, "upstream_error", "Context backend did not return JSON", "response_type");
+    if (!response.ok) observe("upstream_http", response.status);
     return new Response(observed.bytes, { status: response.status, headers: { "content-type": contentType, "cache-control": "no-store" } });
   } catch {
-    if (req.signal.aborted) return formatErrorResponse(499, "client_closed_request", "Context request was canceled");
-    if (linked.signal.aborted) return formatErrorResponse(504, "upstream_error", "Context backend timed out");
-    if (accountReady) return formatErrorResponse(502, "upstream_error", "Context backend request failed");
-    return formatErrorResponse(409, "context_account_unavailable", "Cannot use the original context account; restore it before continuing");
+    if (req.signal.aborted) return failure(499, "client_closed_request", "Context request was canceled", "client_canceled");
+    if (linked.signal.aborted) return failure(504, "upstream_error", "Context backend timed out", "deadline");
+    if (accountReady) return failure(502, "upstream_error", "Context backend request failed", "transport");
+    return failure(409, "context_account_unavailable", "Cannot use the original context account; restore it before continuing", "account_unavailable");
   } finally {
     if (auth) releaseCodexAuthContextProbeLease(auth);
     linked.cleanup();
