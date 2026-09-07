@@ -192,6 +192,10 @@ import {
 } from "../../codex/main-account";
 import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import {
+  bindContextAccount, contextSelfReportGuidance, contextSessionFromHeaders,
+  gptContextManagementEnabled, GPT_CONTEXT_MODELS, readContextAccountBinding,
+} from "../../codex/context-management";
+import {
   computeQuotaCooldown,
   codexQuotaScopeForModel,
   formatCodexProviderForLog,
@@ -3961,6 +3965,25 @@ async function handleResponsesInner(
 
   let substituteMainCredential = false;
   let callerAuthHeaders: Headers;
+  const contextSessionId = contextSessionFromHeaders(req.headers);
+  if (contextSessionId) {
+    if (!gptContextManagementEnabled(config) || !GPT_CONTEXT_MODELS.has(route.modelId)
+      || route.providerName !== "openai" || !isCanonicalOpenAiForwardProvider(route.provider)) {
+      return formatErrorResponse(409, "context_model_unsupported", "This experimental context requires native GPT Sol or Astra; start a new session for Luna, Terra or another provider");
+    }
+    try {
+      const binding = readContextAccountBinding(contextSessionId);
+      if (binding?.kind === "pool") {
+        if (route.codexAccountId && route.codexAccountId !== binding.accountId) throw new Error("Account selector changed");
+        route.codexAccountId = binding.accountId!;
+      } else if (binding?.kind === "caller") {
+        if (route.codexAccountId && route.codexAccountId !== MAIN_CODEX_ACCOUNT_ID) throw new Error("Account selector changed");
+        route.codexAccountMode = "direct";
+      }
+    } catch {
+      return formatErrorResponse(409, "context_account_unavailable", "Restore the original context account before continuing this session");
+    }
+  }
   {
     const finalAuth = await resolveResponsesCodexAuth(req, config, route, options, credentialDomainWasRewritten);
     if (!finalAuth.ok) return finalAuth.response;
@@ -3968,6 +3991,20 @@ async function handleResponsesInner(
     selectedForwardHeaders = finalAuth.headers;
     callerAuthHeaders = finalAuth.callerAuthHeaders;
     substituteMainCredential = finalAuth.substituteMainCredential;
+  }
+  if (contextSessionId) {
+    try {
+      const binding = bindContextAccount(contextSessionId, route.modelId, authCtx, selectedForwardHeaders, substituteMainCredential);
+      if (authCtx.kind !== "main") {
+        authCtx.fixedAccount = true;
+        route.codexAccountId = authCtx.accountId;
+      }
+      if (binding.kind === "caller") route.codexAccountMode = "direct";
+      injectDeveloperMessage(parsed, contextSelfReportGuidance(route.modelId));
+    } catch {
+      releaseCodexAuthContextProbeLease(authCtx);
+      return formatErrorResponse(409, "context_account_changed", "Context history belongs to a different account; restore it or start a new session");
+    }
   }
 
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
