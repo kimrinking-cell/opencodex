@@ -574,6 +574,8 @@ export interface OcxConfig {
    enabled?: boolean;
    /** Replacement model id (e.g. "gpt-5.5"). */
    model?: string;
+   /** Optional configured reasoning effort; invalid values fall back to low at runtime. */
+   effort?: string;
    /** Optional override of intercepted source-model prefixes (default: gpt-5.4-mini, gpt-5.6-luna). */
    sourceModels?: string[];
  };
