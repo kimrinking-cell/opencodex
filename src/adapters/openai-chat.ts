@@ -1,7 +1,7 @@
 import type { AdapterRequest, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall, OcxUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
-import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { mapReasoningEffort, modelRecordValue, resolveReasoningEffortDecision } from "../reasoning-effort";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { isDebugEnabled } from "../lib/debug-settings";
@@ -123,6 +123,23 @@ export function buildOpenAIChatPassthroughRequest(
   for (const field of CHAT_PASSTHROUGH_FIELDS) {
     if (rawBody[field] !== undefined) body[field] = rawBody[field];
   }
+  const passthroughReasoning = resolveReasoningEffortDecision(
+    provider,
+    modelId,
+    typeof rawBody.reasoning_effort === "string" ? rawBody.reasoning_effort : undefined,
+  );
+  const passthroughReasoningLog: AdapterRequest["reasoningLog"] = passthroughReasoning
+    ? {
+      effectiveEffort: passthroughReasoning.effectiveEffort,
+      reasoningWireOmitted: passthroughReasoning.reasoningWireOmitted,
+      wireField: "reasoning_effort",
+      wireValue: passthroughReasoning.wireValue,
+    }
+    : undefined;
+  if (passthroughReasoning) {
+    if (passthroughReasoning.reasoningWireOmitted) delete body.reasoning_effort;
+    else body.reasoning_effort = passthroughReasoning.wireValue;
+  }
 
   const openRouterRouting = resolveOpenRouterRouting(provider, modelId);
   if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
@@ -191,7 +208,13 @@ export function buildOpenAIChatPassthroughRequest(
     });
   }
 
-  return { url, method: "POST", headers, body: bodyJson };
+  return {
+    url,
+    method: "POST",
+    headers,
+    body: bodyJson,
+    ...(passthroughReasoningLog ? { reasoningLog: passthroughReasoningLog } : {}),
+  };
 }
 
 // 260715 (issue #126): surface upstream error detail through the web-search sidecar loop.
@@ -1501,6 +1524,11 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const reasoningEffort = omitReasoningEffortWithTools
         ? undefined
         : mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
+      const reasoningDecision = resolveReasoningEffortDecision(
+        provider,
+        parsed.modelId,
+        parsed.options.reasoning,
+      );
       const nativeOpenAI = isNativeOpenAIChatTarget(provider);
       let reasoningLog: AdapterRequest["reasoningLog"];
       if (!reasoningDisabled && !omitReasoningEffortWithTools && provider.reasoningWireFormat === "gateway-object" && parsed.options.reasoning === "none") {
@@ -1519,6 +1547,13 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             wireValue: false,
           };
         }
+      } else if (reasoningDecision?.reasoningWireOmitted === true) {
+        reasoningLog = {
+          effectiveEffort: reasoningDecision.effectiveEffort,
+          reasoningWireOmitted: true,
+          wireField: "reasoning_effort",
+          wireValue: reasoningDecision.wireValue,
+        };
       } else if (reasoningEffort !== undefined) {
         if (provider.reasoningWireFormat === "gateway-object") {
           if (nativeOpenAI) {
