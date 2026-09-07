@@ -388,6 +388,8 @@ export function deriveEntry(
       // native tool/search/responses-lite contract while preserving the routed slug and wire id.
       if (!codexForwardNativeCapabilityAlias) {
         normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true, model?.codexToolMode);
+        e.include_plugin_usage_instructions = false;
+        e.include_apps_usage_instructions = false;
       } else if (model?.codexToolMode !== undefined) {
         applyRoutedCodexToolMode(e, model.codexToolMode);
       }
@@ -437,6 +439,8 @@ export function deriveEntry(
   if (isRouted) {
     applyRoutedCodexToolMode(entry, model?.codexToolMode);
     applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExactReasoning);
+    entry.include_plugin_usage_instructions = false;
+    entry.include_apps_usage_instructions = false;
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);

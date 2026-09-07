@@ -278,6 +278,8 @@ export interface MultiAgentGuidanceOptions {
   subagentModels?: string[];
   subagentModelFallback?: string[];
   injectionPrompt?: string;
+  /** Routed providers receive only proxy-owned collaboration guidance. */
+  externalRouted?: boolean;
 }
 
 
@@ -369,6 +371,7 @@ export async function multiAgentGuidanceText(
     subagentModels,
     subagentModelFallback,
     injectionPrompt,
+    externalRouted = false,
   } = options;
   const activeAccountNamespace = codexAccountNamespace?.length
     ? codexAccountNamespace
@@ -459,7 +462,9 @@ export async function multiAgentGuidanceText(
         .map(item => `${item.configured}:${item.reason}`)
         .join(", ")}`);
     }
-    const fallbackGuidance = subagentFallbackGuidanceText({ subagentModelFallback } as OcxConfig);
+    const fallbackGuidance = externalRouted
+      ? ""
+      : subagentFallbackGuidanceText({ subagentModelFallback } as OcxConfig);
     if (!injectionModel && roster === "" && fallbackGuidance === "") return null;
     if (injectionPrompt) {
       // Bare ids must resolve to a unique/current-route candidate. Preserve the legacy raw
