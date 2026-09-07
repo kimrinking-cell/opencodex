@@ -80,6 +80,28 @@ The proxy listens on port `10100` by default and serves `POST /v1/responses`,
 `POST /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`,
 `GET /v1/models`, `GET /healthz`, and the `/api/*` management surface.
 
+### Native Astra steering transport
+
+When the canonical `openai` Responses route selects the Astra model and the upstream WebSocket
+contract is supported, the proxy can keep one authenticated upstream session for a turn. A
+`response.steer` is sent on that same socket; accepted and pending status, the steered incomplete
+event, and the automatic successor response are relayed in order. Pending tool input can arrive after
+the first response is complete, and the original function-call IDs remain available for the
+continuation.
+
+The normal `handleResponses` preparation still owns account/context binding, request and tool
+normalization, admission, outcomes, and cleanup. Unsupported requests receive an explicit steering
+error and keep the existing HTTP/SSE behavior. After the native socket opens, or when a send is
+ambiguous, the proxy does not replay the request through another account or transport. This is the
+proxy transport stage; it does not by itself replace an installed Codex Desktop/App runtime. The
+initial request is the only canonical preparation pass: later same-socket continuations accept only
+the original native request settings together with a new `previous_response_id`/`input`, validate
+those repeated settings against the original ingress frame, and reuse their already-canonicalized
+values. Function-call and custom-tool output items are supported; stable session/thread/turn
+metadata remains pinned while a narrow trace-metadata refresh is allowed. A changed route, account,
+context, tool, instruction, or other non-trace setting receives an explicit preparation error
+instead of being forwarded raw; a fresh canonical request is required for that change.
+
 ### Built-in image generation (`image_gen`)
 
 Codex's built-in `image_gen` tool does not go through `/v1/responses` — the codex-rs extension

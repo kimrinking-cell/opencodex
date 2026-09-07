@@ -197,12 +197,16 @@ export async function pumpResponsesSseToWebSocket(
     isCurrent?: () => boolean;
     onTerminal?: ResponsesTerminalReporter;
     onSsePayload?: ResponsesPayloadObserver;
+    /** Native Astra keeps one upstream socket alive across terminal events. */
+    keepAliveAfterTerminal?: boolean;
   } = {},
 ): Promise<void> {
   const reader = sseStream.getReader();
   const isCurrent = options.isCurrent ?? (() => true);
   let clientCancelled = false;
   let terminalReported = false;
+  let sawTerminal = false;
+  const keepAliveAfterTerminal = options.keepAliveAfterTerminal === true;
   const reportTerminal = (status: ResponsesTerminalStatus) => {
     if (terminalReported || clientCancelled || !isCurrent()) return;
     terminalReported = true;
@@ -234,14 +238,17 @@ export async function pumpResponsesSseToWebSocket(
       void reader.cancel().catch(() => {});
       return true;
     }
-    if (terminalSeen) return true;
+    if (terminalSeen && !keepAliveAfterTerminal) return true;
     sendTextFrame(ws, payload);
     const terminalStatus = terminalStatusFromType(type);
     if (terminalStatus) {
+      sawTerminal = true;
       reportTerminal(terminalStatus);
-      terminalSeen = true;
-      void reader.cancel().catch(() => {});
-      return true;
+      if (!keepAliveAfterTerminal) {
+        terminalSeen = true;
+        void reader.cancel().catch(() => {});
+        return true;
+      }
     }
     return false;
   };
@@ -260,7 +267,7 @@ export async function pumpResponsesSseToWebSocket(
       const payload = parseSseBlock(decoder.decode(tail));
       if (payload) handlePayload(payload);
     }
-    if (!terminalSeen && isCurrent() && !clientCancelled) {
+    if (!terminalSeen && !sawTerminal && isCurrent() && !clientCancelled) {
       reportTerminal("incomplete");
       sendProtocolError(ws, 502, "Upstream stream ended before response terminal event");
     }
@@ -336,6 +343,7 @@ export async function sendResponseToWebSocket(
   options: {
     onTerminal?: ResponsesTerminalReporter;
     onSsePayload?: ResponsesPayloadObserver;
+    keepAliveAfterTerminal?: boolean;
   } = {},
 ): Promise<void> {
   if (!isCurrent()) {
@@ -366,6 +374,7 @@ export async function sendResponseToWebSocket(
       isCurrent,
       onTerminal: options.onTerminal,
       onSsePayload: options.onSsePayload,
+      keepAliveAfterTerminal: options.keepAliveAfterTerminal,
     });
     return;
   }
@@ -388,6 +397,7 @@ export async function sendResponseToWebSocket(
       isCurrent,
       onTerminal: options.onTerminal,
       onSsePayload: options.onSsePayload,
+      keepAliveAfterTerminal: options.keepAliveAfterTerminal,
     });
     return;
   }
