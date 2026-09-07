@@ -624,9 +624,7 @@ describe("OpenAI provider-option integration spine", () => {
         removeTreeWithRetry(migrationRoot);
       }
 
-      expect(new Set(blockedUpstreamWebSocketUrls)).toEqual(new Set([
-        "wss://chatgpt.com/backend-api/codex/responses",
-      ]));
+      expect(blockedUpstreamWebSocketUrls).toEqual([]);
       if (process.platform === "win32") {
         expect(aclSeamCalls).toBeGreaterThan(0);
         expect(principalSeamCalls).toBeGreaterThan(0);
