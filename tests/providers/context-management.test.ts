@@ -6,7 +6,7 @@ import {
   applyGptContextManagement, bindContextAccount, contextSessionFromHeaders,
   GPT_CONTEXT_MODELS, LEGACY_CONTEXT_MODELS, readContextAccountBinding, restoreGptContextManagement,
 } from "../../src/codex/context-management";
-import { handleContextManagement, isContextManagementPath } from "../../src/server/context-management";
+import { handleContextManagement, isContextManagementPath, type ContextRelayFailure } from "../../src/server/context-management";
 import { handleResponses } from "../../src/server/responses";
 import { loadConfig, saveConfig, validateConfigCandidate } from "../../src/config";
 import { startServer } from "../../src/server";
@@ -206,6 +206,57 @@ test("another account never reaches the backend", async () => {
   });
   expect(response.status).toBe(409);
   expect(calls).toBe(0);
+});
+
+test("context diagnostics distinguish deadline, cancellation and HTTP failure without leaking opaque data or retrying writes", async () => {
+  bind();
+  for (const scenario of ["deadline", "client", "http"] as const) {
+    const events: ContextRelayFailure[] = [];
+    const controller = new AbortController();
+    const incoming = new Request(request("alpha/notes/v2/append_to_file", {
+      context: { session_id: "fixture-session" }, path: "private-note-path", text: "private-note-text",
+    }), { signal: controller.signal });
+    let calls = 0;
+    const response = await handleContextManagement(incoming, config, undefined, {
+      deadline: () => ({ signal: scenario === "deadline" ? AbortSignal.abort() : controller.signal, cleanup() {} }),
+      fetch: (async () => {
+        calls++;
+        if (scenario === "client") controller.abort();
+        if (scenario !== "http") throw new Error("private-upstream-error");
+        return Response.json({ error: "private-upstream-body" }, { status: 503 });
+      }) as typeof fetch,
+      observeFailure: event => events.push(event),
+    });
+    const status = scenario === "deadline" ? 504 : scenario === "client" ? 499 : 503;
+    expect(response.status).toBe(status);
+    expect(calls).toBe(1);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event: "context_relay_failure", operation: "alpha/notes/v2/append_to_file",
+      phase: scenario === "http" ? "upstream_body" : "upstream_headers",
+      kind: scenario === "deadline" ? "deadline" : scenario === "client" ? "client_canceled" : "upstream_http",
+      status, upstream_status: scenario === "http" ? 503 : null,
+      deadline_ms: 35_000, write_outcome: "unknown",
+      client_aborted: scenario === "client", relay_aborted: scenario !== "http",
+    });
+    expect(events[0]!.context_tag).toMatch(/^[a-f0-9]{16}$/);
+    for (const privateValue of ["fixture-session", "fixture-account-a", "private-note", "private-upstream", "Bearer"]) {
+      expect(JSON.stringify(events)).not.toContain(privateValue);
+    }
+  }
+});
+
+test("context failure diagnostics cannot alter relay responses and identify an auth-phase deadline", async () => {
+  bind();
+  const events: ContextRelayFailure[] = [];
+  const response = await handleContextManagement(request(), config, undefined, {
+    deadline: () => ({ signal: AbortSignal.abort(), cleanup() {} }),
+    materializeAuth: async () => { throw new Error("private-auth-failure"); },
+    observeFailure: event => { events.push(event); throw new Error("observer failed"); },
+  });
+  expect(response.status).toBe(504);
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({ phase: "materialize_auth", kind: "deadline", upstream_status: null, write_outcome: "not_applicable" });
 });
 
 test("pool relay resolves the original added or main account explicitly and checks refreshed identity", async () => {
