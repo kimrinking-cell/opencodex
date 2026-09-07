@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { buildCatalogEntries } from "../../src/codex/catalog";
+import { applyProviderConfigHints, buildCatalogEntries } from "../../src/codex/catalog";
 import { createAnthropicAdapter } from "../../src/adapters/anthropic";
-import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import type { AdapterRequest } from "../../src/adapters/base";
 import { configuredReasoningEfforts, mapReasoningEffort, sanitizeCodexReasoningEfforts } from "../../src/reasoning-effort";
 import { routeModel } from "../../src/router";
@@ -48,6 +48,52 @@ function buildChatRequest(
 }
 
 describe("provider-specific reasoning effort mapping", () => {
+  test("TokenRouter Qwen3.8 Max Free keeps the exact low/medium/xhigh ladder across both Chat serializers", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.tokenrouter.com/v1/",
+      models: ["qwen/qwen3.8-max-free"],
+    };
+
+    expect(configuredReasoningEfforts(provider, "qwen/qwen3.8-max-free")).toEqual(["low", "medium", "xhigh"]);
+    expect(configuredReasoningEfforts(provider, "qwen-qwen3.8-max-free")).toEqual(["low", "medium", "xhigh"]);
+    for (const [requested, wire] of [["low", "low"], ["medium", "medium"]] as const) {
+      const body = JSON.parse(buildOpenAIChatPassthroughRequest(provider, {
+        model: "qwen/qwen3.8-max-free", messages: [], reasoning_effort: requested,
+      }, "qwen/qwen3.8-max-free", false).body) as Record<string, unknown>;
+      expect(body.reasoning_effort).toBe(wire);
+    }
+    for (const requested of ["high", "xhigh", "max", "ultra"]) {
+      const native = buildOpenAIChatPassthroughRequest(provider, {
+        model: "qwen/qwen3.8-max-free", messages: [], reasoning_effort: requested,
+      }, "qwen/qwen3.8-max-free", false);
+      const body = JSON.parse(native.body) as Record<string, unknown>;
+      expect(body).not.toHaveProperty("reasoning_effort");
+      expect(native.reasoningLog).toEqual({
+        effectiveEffort: "xhigh",
+        reasoningWireOmitted: true,
+        wireField: "reasoning_effort",
+        wireValue: "xhigh",
+      });
+
+      const ordinary = buildChatRequest(provider, "qwen/qwen3.8-max-free", { reasoning: requested });
+      expect(JSON.parse(ordinary.body)).not.toHaveProperty("reasoning_effort");
+      expect(ordinary.reasoningLog).toEqual(native.reasoningLog);
+    }
+  });
+
+  test("TokenRouter Qwen3.8 catalog preserves xhigh as the default without synthetic max/ultra", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.tokenrouter.com/v1",
+      models: ["qwen/qwen3.8-max-free"],
+    };
+    const hinted = applyProviderConfigHints("tokenrouter", provider, { id: "qwen/qwen3.8-max-free", provider: "tokenrouter" });
+    const entry = buildCatalogEntries(nativeTemplate(), [], [hinted]).find(e => e.slug === "tokenrouter/qwen-qwen3.8-max-free");
+    expect((entry?.supported_reasoning_levels as { effort: string }[]).map(level => level.effort)).toEqual(["low", "medium", "xhigh"]);
+    expect(entry?.default_reasoning_level).toBe("xhigh");
+  });
+
   test("Codex catalog advertises only the efforts actually supported by a routed model", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "neuralwatt", id: "glm-5.2", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
