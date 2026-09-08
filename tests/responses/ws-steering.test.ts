@@ -161,6 +161,38 @@ describe("native Astra Responses WebSocket steering", () => {
     result.session.close();
   });
 
+  test("reports a changed stream option with a native-readable error and accepts the original option", async () => {
+    const upstream = new FixtureUpstream();
+    const streamOptions = { reasoning_summary_delivery: "sequential_cutoff" };
+    const { result } = await startedSession({
+      upstream,
+      body: { model: NATIVE_ASTRA_MODEL, input: "fixture", stream_options: streamOptions },
+      acquireTurnLease: () => lease(() => {}),
+    });
+    const reader = result.response.body!.getReader();
+    upstream.emitMessage(responseEvent("R1"));
+    upstream.emitMessage(responseEvent("R1", "completed"));
+    await nextSseEvent(reader);
+    await nextSseEvent(reader);
+    const continuation = {
+      type: "response.create", previous_response_id: "R1",
+      input: [{ type: "function_call_output", call_id: "C1", output: "result" }],
+    };
+    try {
+      result.session.handleClientFrame({ ...continuation, stream_options: { reasoning_summary_delivery: "changed" } });
+      expect(await nextSseEvent(reader)).toMatchObject({
+        type: "error", status: 400, error: { code: "continuation_preparation_unsupported" },
+      });
+      expect(upstream.sent).toHaveLength(1);
+      result.session.handleClientFrame({ ...continuation, stream_options: streamOptions });
+      expect(upstream.sent).toHaveLength(2);
+      expect(JSON.parse(upstream.sent[1]!).stream_options).toEqual(streamOptions);
+    } finally {
+      result.session.close();
+      reader.releaseLock();
+    }
+  });
+
   test("compacts pretty-printed upstream JSON into one SSE data line", async () => {
     const upstream = new FixtureUpstream();
     const { result } = await startedSession({ upstream });
@@ -677,6 +709,7 @@ describe("composed native Astra endpoint", () => {
           tool_choice: "auto",
           parallel_tool_calls: false,
           reasoning: { effort: "low" },
+          stream_options: { reasoning_summary_delivery: "sequential_cutoff" },
           store: false,
           include: ["reasoning.encrypted_content"],
           service_tier: "default",
@@ -784,6 +817,7 @@ describe("composed native Astra endpoint", () => {
           "response.completed",
         ]);
         expect((received[1]!.item as Record<string, unknown>).call_id).toBe("C1");
+        expect(rejectedContinuations.every(frame => frame.status === 400)).toBe(true);
         const successorOutput = received.find(frame => frame.type === "response.output_item.done" && frame.response_id === "R2");
         expect((successorOutput?.item as Record<string, unknown> | undefined)?.content?.[0]?.text).toBe("STEERING_TOOL_APPLIED");
         expect(upstreamUrl).toBe("wss://chatgpt.com/backend-api/codex/responses");
@@ -799,7 +833,7 @@ describe("composed native Astra endpoint", () => {
         for (const wire of [initialWire, successorWire]) {
           expect((wire.client_metadata as Record<string, unknown>)?.ws_request_header_x_openai_internal_codex_responses_lite).toBeUndefined();
         }
-        for (const field of ["instructions", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "store", "include", "service_tier", "prompt_cache_key", "text", "access_programs"]) {
+        for (const field of ["instructions", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "stream_options", "store", "include", "service_tier", "prompt_cache_key", "text", "access_programs"]) {
           expect(successorWire[field]).toEqual(initialWire[field]);
         }
         expect((initialWire.tools as Record<string, unknown>[])[0]?.async).toBe(true);
