@@ -132,6 +132,12 @@ event, and the automatic successor response are relayed in order. Pending tool i
 the first response is complete, and the original function-call IDs remain available for the
 continuation.
 
+Native async steering uses the full Responses protocol. Responses Lite metadata is removed on this
+path because Lite does not support async tool acknowledgements. The relay preserves multiline JSON
+events by serializing each SSE payload onto one line. A connection failure after steering was
+accepted leaves its application status unknown; the input is not automatically replayed. A successful
+first response alone does not establish that a later steering instruction was applied.
+
 The normal `handleResponses` preparation still owns account/context binding, request and tool
 normalization, admission, outcomes, and cleanup. Unsupported requests receive an explicit steering
 error and keep the existing HTTP/SSE behavior. After the native socket opens, or when a send is
