@@ -143,6 +143,11 @@ for a changed tool, instruction, route, account, context, or other non-trace opt
 an explicit preparation error; it is not forwarded as an untransformed provider request. A fresh
 canonical request is required for that change.
 
+The repeated settings include the native client's `stream_options` for reasoning summary delivery.
+It is validated against the original ingress value like the other fixed settings. Local WebSocket
+validation errors include a numeric `status` so the native Responses reader recognizes them; an
+unrecognized error envelope would otherwise strand a pending tool continuation until disconnection.
+
 ### Semantic progress ownership
 
 The Responses proxy does not treat transcript growth as repository progress. It can observe request
