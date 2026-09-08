@@ -7,6 +7,7 @@ import type { ResponsesTerminalStatus } from "../bridge";
 import type { DataPlaneAdmission } from "./auth-cors";
 import type { AdmissionLease, AdmissionReservation } from "../lib/admission";
 import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
+import { sseFieldValue } from "../lib/sse-decoder";
 import { safeResponseHeaders } from "./safe-response-headers";
 
 export { safeResponseHeaders } from "./safe-response-headers";
@@ -145,24 +146,78 @@ export function buildWsErrorFrame(
   };
 }
 
-function parseSseBlock(block: string): string | null {
-  const data: string[] = [];
-  for (const line of block.split(/\r?\n/)) {
-    if (line.startsWith("data:")) {
-      const value = line.slice(5);
-      data.push(value.startsWith(" ") ? value.slice(1) : value);
-    }
+function jsonParses(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
   }
-  return data.length > 0 ? data.join("\n") : null;
 }
 
-function payloadType(payload: string): string | null {
-  try {
-    const json = JSON.parse(payload) as { type?: unknown };
-    return typeof json.type === "string" ? json.type : null;
-  } catch {
-    return null;
+function parseSseBlock(block: string): { event?: string; payload: string } | null {
+  const data: string[] = [];
+  const continuation: string[] = [];
+  let event: string | undefined;
+  let seenData = false;
+  for (const line of block.split(/\r?\n/)) {
+    const eventValue = sseFieldValue(line, "event");
+    if (eventValue !== null) {
+      event = eventValue;
+      continue;
+    }
+    if (sseFieldValue(line, "id") !== null || sseFieldValue(line, "retry") !== null) continue;
+    if (line.startsWith(":")) continue;
+    const dataValue = sseFieldValue(line, "data");
+    if (dataValue !== null) {
+      seenData = true;
+      data.push(dataValue);
+      continue;
+    }
+    if (seenData) continuation.push(line);
   }
+  if (data.length === 0) return null;
+  let payload = data.join("\n");
+  // `data: ${prettyJson}\n\n` is invalid SSE: the first newline ends the field, so the
+  // payload becomes `{`. Rejoin following non-field lines when that recovers JSON.
+  if (continuation.length > 0) {
+    const recovered = [payload, ...continuation].join("\n");
+    if (!jsonParses(payload) && jsonParses(recovered)) payload = recovered;
+  }
+  return event ? { event, payload } : { payload };
+}
+
+type ClassifiedResponsesSsePayload =
+  | { kind: "done" }
+  | { kind: "skip" }
+  | { kind: "invalid" }
+  | { kind: "event"; type: string; forward: string };
+
+function classifyResponsesSsePayload(payload: string, eventName?: string): ClassifiedResponsesSsePayload {
+  const trimmed = payload.trim();
+  if (trimmed === "[DONE]") return { kind: "done" };
+  if (trimmed.length === 0) return { kind: "skip" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return { kind: "invalid" };
+  }
+  // Protocol V1 padding: null, scalar, and array data values are keepalives, not events.
+  // Treating them as a 502 used to abort Codex native steering mid-turn (#1219 class).
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { kind: "skip" };
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.type === "string" && record.type.length > 0) {
+    return {
+      kind: "event",
+      type: record.type,
+      forward: /[\r\n]/.test(payload) ? JSON.stringify(record) : payload,
+    };
+  }
+  if (eventName && eventName.length > 0) {
+    return { kind: "event", type: eventName, forward: JSON.stringify({ ...record, type: eventName }) };
+  }
+  return { kind: "skip" };
 }
 
 function terminalStatusFromType(type: string): ResponsesTerminalStatus | null {
@@ -222,16 +277,18 @@ export async function pumpResponsesSseToWebSocket(
   const framer = new BoundedSseFrameBuffer();
   let terminalSeen = false;
 
-  const handlePayload = (payload: string): boolean => {
+  const handlePayload = (payload: string, eventName?: string): boolean => {
     if (!isCurrent()) return true;
-    if (payload === "[DONE]") return false;
+    const classified = classifyResponsesSsePayload(payload, eventName);
+    if (classified.kind === "done" || classified.kind === "skip") return false;
     try {
       options.onSsePayload?.(payload);
     } catch {
       /* payload observation must not affect WebSocket delivery */
     }
-    const type = payloadType(payload);
-    if (!type) {
+    if (classified.kind === "invalid") {
+      // Native sessions can carry later responses after a terminal. Malformed
+      // JSON may hide their steering outcome; only classified padding is skipped.
       reportTerminal("incomplete");
       sendProtocolError(ws, 502, "Invalid JSON payload in upstream SSE frame");
       terminalSeen = true;
@@ -239,8 +296,8 @@ export async function pumpResponsesSseToWebSocket(
       return true;
     }
     if (terminalSeen && !keepAliveAfterTerminal) return true;
-    sendTextFrame(ws, payload);
-    const terminalStatus = terminalStatusFromType(type);
+    sendTextFrame(ws, classified.forward);
+    const terminalStatus = terminalStatusFromType(classified.type);
     if (terminalStatus) {
       sawTerminal = true;
       reportTerminal(terminalStatus);
@@ -258,14 +315,14 @@ export async function pumpResponsesSseToWebSocket(
       const { done, value } = await reader.read();
       if (done) break;
       for (const frame of framer.feed(value)) {
-        const payload = parseSseBlock(decoder.decode(frame.block));
-        if (payload && handlePayload(payload)) break;
+        const parsed = parseSseBlock(decoder.decode(frame.block));
+        if (parsed && handlePayload(parsed.payload, parsed.event)) break;
       }
     }
     const tail = framer.finish();
     if (!terminalSeen && tail.byteLength > 0) {
-      const payload = parseSseBlock(decoder.decode(tail));
-      if (payload) handlePayload(payload);
+      const parsed = parseSseBlock(decoder.decode(tail));
+      if (parsed) handlePayload(parsed.payload, parsed.event);
     }
     if (!terminalSeen && !sawTerminal && isCurrent() && !clientCancelled) {
       reportTerminal("incomplete");

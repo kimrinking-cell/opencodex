@@ -8,6 +8,10 @@
  */
 
 import {
+  CODEX_RESPONSES_LITE_HEADER,
+  CODEX_RESPONSES_LITE_METADATA_KEY,
+} from "../../codex/forward-transport-headers";
+import {
   CODEX_WS_CREATE_FRAME_LIMIT_BYTES,
   MAX_CODEX_WS_FRAME_BYTES,
 } from "./ws-upstream";
@@ -139,7 +143,16 @@ function websocketHeaders(headers: Record<string, string>): Record<string, strin
   const result: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
-    if (lower === "content-type" || lower === "content-length" || lower === "accept" || lower === "accept-encoding") continue;
+    if (
+      lower === "content-type"
+      || lower === "content-length"
+      || lower === "accept"
+      || lower === "accept-encoding"
+      // Native Astra steering carries async tools. Responses Lite rejects those
+      // with 400 unsupported_value; the pretty-printed error used to surface as
+      // a 502 invalid SSE JSON fatal instead.
+      || lower === CODEX_RESPONSES_LITE_HEADER
+    ) continue;
     result[name] = value;
   }
   const existingBeta = result["openai-beta"] ?? result["Openai-Beta"];
@@ -153,9 +166,20 @@ function frameBytes(text: string): number {
   return Buffer.byteLength(text, "utf8");
 }
 
+function withoutLiteMetadata(frame: Record<string, unknown>): Record<string, unknown> {
+  const metadata = objectRecord(frame.client_metadata);
+  if (!metadata || !Object.prototype.hasOwnProperty.call(metadata, CODEX_RESPONSES_LITE_METADATA_KEY)) return frame;
+  const nextMetadata = { ...metadata };
+  delete nextMetadata[CODEX_RESPONSES_LITE_METADATA_KEY];
+  const next = { ...frame };
+  if (Object.keys(nextMetadata).length === 0) delete next.client_metadata;
+  else next.client_metadata = nextMetadata;
+  return next;
+}
+
 function stringifyFrame(frame: Record<string, unknown>): string | undefined {
   try {
-    const text = JSON.stringify(frame);
+    const text = JSON.stringify(withoutLiteMetadata(frame));
     return typeof text === "string" ? text : undefined;
   } catch {
     return undefined;
@@ -663,11 +687,18 @@ class NativeResponsesWsSessionImpl implements NativeResponsesWsSession {
       this.failOpened("upstream_protocol_error", "Native Responses WebSocket returned an invalid event");
       return;
     }
-    let relayText = text;
+    let relayText: string;
     try {
       const sanitized = this.metadata.consume(event, frameBytes(text));
-      if (sanitized !== null) relayText = sanitized;
-      else this.metadata.commit();
+      if (sanitized !== null) {
+        relayText = sanitized;
+      } else {
+        this.metadata.commit();
+        // SSE data fields end at the first newline. Pretty-printed upstream JSON
+        // must be compacted before wrapping, or the WS pump sees `data: {` and
+        // 502s the native turn.
+        relayText = JSON.stringify(event);
+      }
     } catch {
       this.failOpened("upstream_metadata_error", "Native Responses WebSocket metadata exceeded its size limit");
       return;
