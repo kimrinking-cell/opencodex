@@ -28,7 +28,7 @@ class FixtureUpstream implements NativeResponsesWsUpstream {
   private closed = false;
   private readonly listeners = new Map<string, EventListener[]>();
 
-  constructor(private readonly onSend?: SendHook, autoOpen = true) {
+  constructor(private readonly onSend?: SendHook, autoOpen = true, private readonly prettyFrames = false) {
     if (autoOpen) queueMicrotask(() => this.open());
   }
 
@@ -59,7 +59,7 @@ class FixtureUpstream implements NativeResponsesWsUpstream {
 
   emitMessage(payload: Record<string, unknown> | string): void {
     if (this.closed) return;
-    this.dispatch("message", { data: typeof payload === "string" ? payload : JSON.stringify(payload) });
+    this.dispatch("message", { data: typeof payload === "string" ? payload : JSON.stringify(payload, null, this.prettyFrames ? 2 : undefined) });
   }
 
   emitError(): void {
@@ -159,6 +159,58 @@ describe("native Astra Responses WebSocket steering", () => {
     result.session.handleClientFrame({ type: "response.create", model: NATIVE_ASTRA_MODEL, input: "continue", previous_response_id: "warmup", generate: true });
     expect(JSON.parse(upstream.sent[1]!).generate).toBe(true);
     result.session.close();
+  });
+
+  test("compacts pretty-printed upstream JSON into one SSE data line", async () => {
+    const upstream = new FixtureUpstream();
+    const { result } = await startedSession({ upstream });
+    const reader = result.response.body!.getReader();
+    const pretty = JSON.stringify(responseEvent("pretty-1"), null, 2);
+    expect(pretty).toContain("\n");
+    upstream.emitMessage(pretty);
+    const next = await reader.read();
+    const text = new TextDecoder().decode(next.value);
+    expect(text.startsWith("data: ")).toBe(true);
+    expect(text.endsWith("\n\n")).toBe(true);
+    const payload = text.slice("data: ".length, -2);
+    expect(payload).not.toContain("\n");
+    expect(JSON.parse(payload).type).toBe("response.created");
+    result.session.close();
+  });
+
+  test("drops Responses Lite so native Astra async tools reach the full websocket backend", async () => {
+    const upstream = new FixtureUpstream();
+    let capturedHeaders: Record<string, string> | undefined;
+    const result = await startNativeResponsesWsSession({
+      client: new FixtureClient(),
+      request: {
+        url: "https://chatgpt.com/backend-api/codex/responses",
+        headers: {
+          authorization: "Bearer fixture-token",
+          "x-openai-internal-codex-responses-lite": "true",
+        },
+        body: JSON.stringify({
+          model: NATIVE_ASTRA_MODEL,
+          input: "fixture",
+          stream: true,
+          client_metadata: {
+            ws_request_header_x_openai_internal_codex_responses_lite: "true",
+            session_id: "keep-me",
+          },
+        }),
+      },
+      initialIngressFrame: { model: NATIVE_ASTRA_MODEL, input: "fixture", stream: true },
+      modelId: NATIVE_ASTRA_MODEL,
+      turnLease: lease(() => {}),
+      createWebSocket: ((url, headers) => {
+        capturedHeaders = headers;
+        return upstream;
+      }) as NativeResponsesWsFactory,
+    });
+    expect(result.kind).toBe("started");
+    expect(capturedHeaders?.["x-openai-internal-codex-responses-lite"]).toBeUndefined();
+    expect(JSON.parse(upstream.sent[0]!).client_metadata).toEqual({ session_id: "keep-me" });
+    if (result.kind === "started") result.session.close();
   });
 
   test("retires a timed-out fallback so a late upstream open cannot send response.create", async () => {
@@ -535,7 +587,7 @@ describe("native Astra Responses WebSocket steering", () => {
 });
 
 describe("composed native Astra endpoint", () => {
-  test("uses canonical context binding and forwards steer plus async tool IDs over one upstream socket", async () => {
+  test("uses canonical context binding with pretty JSON, Lite ingress, steering and async tool IDs on one socket", async () => {
     const previousHome = process.env.OPENCODEX_HOME;
     const previousFetch = globalThis.fetch;
     const home = mkdtempSync(join(tmpdir(), "ocx-astra-ws-"));
@@ -592,7 +644,7 @@ describe("composed native Astra endpoint", () => {
               queueMicrotask(() => socket.close());
             });
           }
-        });
+        }, true, true);
         return upstream;
       };
 
@@ -635,6 +687,7 @@ describe("composed native Astra endpoint", () => {
             thread_id: "fixture-thread",
             turn_id: "fixture-turn",
             trace_id: "trace-initial",
+            ws_request_header_x_openai_internal_codex_responses_lite: "true",
           },
           access_programs: ["fixture-access-program"],
         };
@@ -656,6 +709,7 @@ describe("composed native Astra endpoint", () => {
           headers: {
             authorization: `Bearer ${accountToken}`,
             "x-codex-turn-metadata": JSON.stringify({ session_id: "fixture-session", history_ingest_requested: true }),
+            "X-OpenAI-Internal-Codex-Responses-Lite": "true",
           },
         } as unknown as string[]);
         const received: Record<string, unknown>[] = [];
@@ -734,6 +788,7 @@ describe("composed native Astra endpoint", () => {
         expect((successorOutput?.item as Record<string, unknown> | undefined)?.content?.[0]?.text).toBe("STEERING_TOOL_APPLIED");
         expect(upstreamUrl).toBe("wss://chatgpt.com/backend-api/codex/responses");
         expect(upstreamHeaders["openai-beta"]).toContain("responses_websockets=2026-02-06");
+        expect(Object.keys(upstreamHeaders).some(key => key.toLowerCase() === "x-openai-internal-codex-responses-lite")).toBe(false);
         expect(upstreamHeaders.authorization).toBe(`Bearer ${accountToken}`);
         expect(upstreamHeaders["chatgpt-account-id"]).toBe("fixture-account");
         expect(upstream?.sent.map(frame => JSON.parse(frame).type)).toEqual([
@@ -741,6 +796,9 @@ describe("composed native Astra endpoint", () => {
         ]);
         const initialWire = JSON.parse(upstream?.sent[0] ?? "{}") as Record<string, unknown>;
         const successorWire = JSON.parse(upstream?.sent[2] ?? "{}") as Record<string, unknown>;
+        for (const wire of [initialWire, successorWire]) {
+          expect((wire.client_metadata as Record<string, unknown>)?.ws_request_header_x_openai_internal_codex_responses_lite).toBeUndefined();
+        }
         for (const field of ["instructions", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "store", "include", "service_tier", "prompt_cache_key", "text", "access_programs"]) {
           expect(successorWire[field]).toEqual(initialWire[field]);
         }
