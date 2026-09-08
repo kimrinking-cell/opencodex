@@ -108,6 +108,11 @@ metadata remains pinned while a narrow trace-metadata refresh is allowed. A chan
 context, tool, instruction, or other non-trace setting receives an explicit preparation error
 instead of being forwarded raw; a fresh canonical request is required for that change.
 
+Repeated `stream_options` from the native client are accepted when unchanged. Continuation errors
+include a numeric status recognized by the native client, so rejected requests surface immediately
+rather than leaving the task waiting for a disconnected socket. Tool results and steering input
+are never automatically replayed after an ambiguous transport failure.
+
 ### Built-in image generation (`image_gen`)
 
 Codex's built-in `image_gen` tool does not go through `/v1/responses` — the codex-rs extension
