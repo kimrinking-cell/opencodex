@@ -126,6 +126,12 @@ native socket opens or a send is ambiguous, the proxy fails closed: it does not 
 HTTP/SSE or switch accounts. This stage documents the proxy transport only; it is not an installed
 Desktop/App runtime replacement.
 
+Native async steering uses the full Responses wire contract. The proxy removes the Responses Lite
+header and its mirrored client metadata from initial and continuation frames because Lite rejects
+async tool acknowledgements. Upstream WebSocket JSON is serialized onto a single SSE data line;
+JSON padding is ignored, but malformed events remain protocol errors even after an earlier response
+has completed. Otherwise a lost successor event could leave accepted steering unresolved.
+
 The initial prepared request is the only `handleResponses` preparation pass. Later same-socket
 `response.create` frames carry the native client's repeated settings plus a new
 `previous_response_id`/`input`. The proxy validates those settings against the original ingress
