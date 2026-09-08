@@ -241,6 +241,7 @@ const REPEATED_NATIVE_FIELDS = [
   "tool_choice",
   "parallel_tool_calls",
   "reasoning",
+  "stream_options",
   "store",
   "include",
   "service_tier",
@@ -448,9 +449,12 @@ function validateSteerFrame(frame: Record<string, unknown>, currentResponseId: s
   return undefined;
 }
 
-function errorPayload(code: string, message: string): Record<string, unknown> {
+function errorPayload(code: string, message: string, status = 400): Record<string, unknown> {
   return {
     type: "error",
+    // The native Responses WebSocket reader requires status to surface a wrapped error.
+    // Without it, a rejected tool continuation is ignored and the turn waits indefinitely.
+    status,
     error: { type: "invalid_request_error", code, message },
   };
 }
@@ -799,7 +803,7 @@ class NativeResponsesWsSessionImpl implements NativeResponsesWsSession {
       }
       const text = stringifyFrame(frame);
       if (!text || frameBytes(text) > (this.options.maxFrameBytes ?? NATIVE_WS_MAX_FRAME_BYTES)) {
-        this.enqueueEvent(JSON.stringify(errorPayload("message_too_large", "WebSocket control frame is too large")));
+        this.enqueueEvent(JSON.stringify(errorPayload("message_too_large", "WebSocket control frame is too large", 413)));
         return true;
       }
       const hadLease = this.turnLease !== undefined;
@@ -824,7 +828,7 @@ class NativeResponsesWsSessionImpl implements NativeResponsesWsSession {
       }
       const canQueueWhileSteering = this.steeringInFlight || this.steeringAccepted || this.awaitingSuccessor;
       if (this.activeResponse && !canQueueWhileSteering) {
-        this.enqueueEvent(JSON.stringify(errorPayload("response_active", "response.create cannot replace an active native response")));
+        this.enqueueEvent(JSON.stringify(errorPayload("response_active", "response.create cannot replace an active native response", 409)));
         return true;
       }
       const previous = frame.previous_response_id;
@@ -847,11 +851,11 @@ class NativeResponsesWsSessionImpl implements NativeResponsesWsSession {
       }
       const text = stringifyFrame(prepared.frame);
       if (!text || frameBytes(text) > (this.options.maxCreateFrameBytes ?? NATIVE_WS_MAX_CREATE_FRAME_BYTES)) {
-        this.enqueueEvent(JSON.stringify(errorPayload("message_too_large", "response.create frame is too large")));
+        this.enqueueEvent(JSON.stringify(errorPayload("message_too_large", "response.create frame is too large", 413)));
         return true;
       }
       if (!this.acquireTurnLease()) {
-        this.enqueueEvent(JSON.stringify(errorPayload("server_busy", "active turns capacity reached")));
+        this.enqueueEvent(JSON.stringify(errorPayload("server_busy", "active turns capacity reached", 503)));
         return true;
       }
       // Once a continuation has been accepted, any lease acquired for a post-terminal steer is
@@ -865,7 +869,7 @@ class NativeResponsesWsSessionImpl implements NativeResponsesWsSession {
     }
     if (type === "response.cancel") {
       if (!this.activeResponse) {
-        this.enqueueEvent(JSON.stringify(errorPayload("response_not_active", "response.cancel has no active response")));
+        this.enqueueEvent(JSON.stringify(errorPayload("response_not_active", "response.cancel has no active response", 409)));
         return true;
       }
       return this.sendClientFrame(frame, "cancel_send_failed");
@@ -876,7 +880,7 @@ class NativeResponsesWsSessionImpl implements NativeResponsesWsSession {
   private sendClientFrame(frame: Record<string, unknown>, failureCode: string): boolean {
     const text = stringifyFrame(frame);
     if (!text || frameBytes(text) > (this.options.maxFrameBytes ?? NATIVE_WS_MAX_FRAME_BYTES)) {
-      this.enqueueEvent(JSON.stringify(errorPayload("message_too_large", "WebSocket control frame is too large")));
+      this.enqueueEvent(JSON.stringify(errorPayload("message_too_large", "WebSocket control frame is too large", 413)));
       return true;
     }
     return this.sendRawUpstream(text, failureCode);
