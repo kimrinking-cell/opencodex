@@ -217,6 +217,85 @@ describe("WS endpoint re-framer (120/132)", () => {
     expect(cancelled).toBe(true);
   });
 
+  test("recovers pretty-printed JSON wrapped as a single SSE data field", async () => {
+    const { ws, sent } = mockWs();
+    const pretty = JSON.stringify({ type: "response.created", sequence_number: 0 }, null, 2);
+    expect(pretty).toContain("\n");
+    await pumpResponsesSseToWebSocket(ws, sseStream([
+      `data: ${pretty}\n\n`,
+      'data: {"type":"response.completed","response":{"id":"r1"}}\n\n',
+    ]));
+    expect(sent.map(f => JSON.parse(f).type)).toEqual([
+      "response.created",
+      "response.completed",
+    ]);
+    expect(sent[0]).not.toContain("\n");
+  });
+
+  test("native keep-alive does not hide malformed events after an earlier terminal", async () => {
+    const { ws, sent } = mockWs();
+    let cancelled = false;
+    const terminals: string[] = [];
+    await pumpResponsesSseToWebSocket(ws, sseStream([
+      'data: {"type":"response.created"}\n\n',
+      'data: {"type":"response.completed","response":{"id":"r1"}}\n\n',
+      "data: {not-json}\n\n",
+      'data: {"type":"response.created","response":{"id":"must-not-forward"}}\n\n',
+    ], () => { cancelled = true; }), {
+      keepAliveAfterTerminal: true,
+      onTerminal: status => terminals.push(status),
+    });
+    expect(sent.map(f => JSON.parse(f).type)).toEqual([
+      "response.created",
+      "response.completed",
+      "error",
+    ]);
+    expect(JSON.parse(sent.at(-1)!)).toMatchObject({ status: 502, error: { code: "websocket_protocol_error" } });
+    expect(terminals).toEqual(["completed"]);
+    expect(cancelled).toBe(true);
+  });
+
+  test("skips Protocol V1 padding frames and still reaches the terminal", async () => {
+    const { ws, sent } = mockWs();
+    let cancelled = false;
+    const terminals: string[] = [];
+    await pumpResponsesSseToWebSocket(ws, sseStream([
+      'event: response.created\ndata: {"type":"response.created"}\n\n',
+      "data: null\n\n",
+      "data: 42\n\n",
+      "data: []\n\n",
+      "data: true\n\n",
+      "data: {}\n\n",
+      ": keepalive\n\n",
+      'event: response.output_text.delta\ndata: {"delta":"hi"}\n\n',
+      'event: response.completed\ndata: {"type":"response.completed","response":{"id":"r1"}}\n\n',
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"stale"}\n\n',
+    ], () => { cancelled = true; }), { onTerminal: status => terminals.push(status) });
+    expect(sent.map(f => JSON.parse(f).type)).toEqual([
+      "response.created",
+      "response.output_text.delta",
+      "response.completed",
+    ]);
+    expect(JSON.parse(sent[1]).delta).toBe("hi");
+    expect(terminals).toEqual(["completed"]);
+    expect(cancelled).toBe(true);
+  });
+
+  test("padding-only SSE still fails closed at EOF before a terminal event", async () => {
+    const { ws, sent } = mockWs();
+    const terminals: string[] = [];
+    await pumpResponsesSseToWebSocket(ws, sseStream([
+      "data: null\n\n",
+      "data: []\n\n",
+    ]), { onTerminal: status => terminals.push(status) });
+    expect(terminals).toEqual(["incomplete"]);
+    expect(JSON.parse(sent.at(-1)!)).toMatchObject({
+      type: "error",
+      status: 502,
+      error: { message: "Upstream stream ended before response terminal event" },
+    });
+  });
+
   test("converts successful Responses JSON into output_item.done plus response.completed frames", () => {
     const { ws, sent } = mockWs();
     sendResponsesJsonAsEvents(ws, {
