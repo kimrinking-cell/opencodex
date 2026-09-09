@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fallbackCodexAccountLogLabel } from "../../src/codex/account-label";
-import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { isCodexAccountGenerationLive, readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountQuota, getAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
 import {
@@ -17,6 +17,7 @@ import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { CodexWsMetadata } from "../../src/server/responses/codex-ws-metadata";
 import { applyAccountQuotaFromUpstreamHeaders } from "../../src/codex/quota";
+import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 
 const originalFetch = globalThis.fetch;
 
@@ -167,62 +168,60 @@ describe("Responses account usage attribution", () => {
   });
 
   test("late WS quota from a replaced pool credential cannot repopulate cleared state", async () => {
-    const originalWebSocket = globalThis.WebSocket;
-    let releaseFinalQuota!: () => void;
-    const finalQuotaAllowed = new Promise<void>(resolve => { releaseFinalQuota = resolve; });
-    try {
-      await withPoolHome(async () => {
-        savePoolCredential("pool-ws-replaced");
-        class MetadataSocket {
-          listeners = new Map<string, Array<(event: unknown) => void>>();
-          constructor() { queueMicrotask(() => this.emit("open", {})); }
-          addEventListener(type: string, listener: (event: unknown) => void) {
-            this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
-          }
-          removeEventListener(type: string, listener: (event: unknown) => void) {
-            this.listeners.set(type, (this.listeners.get(type) ?? []).filter(value => value !== listener));
-          }
-          emit(type: string, event: unknown) {
-            for (const listener of this.listeners.get(type) ?? []) listener(event);
-          }
-          send() {
-            const payload = (value: unknown) => this.emit("message", { data: JSON.stringify(value) });
-            queueMicrotask(() => {
-              payload({ type: "codex.rate_limits", rate_limits: {
-                primary: { used_percent: 10, window_minutes: 10080 },
-              } });
-              payload({ type: "response.created", response: { id: "quota-response" } });
-              void finalQuotaAllowed.then(() => {
-                payload({ type: "codex.rate_limits", rate_limits: {
-                  primary: { used_percent: 100, window_minutes: 10080 },
-                } });
-                payload({ type: "response.completed", response: { id: "quota-response", status: "completed", output: [] } });
-              });
-            });
-          }
-          close() { this.emit("close", {}); }
-        }
-        globalThis.WebSocket = MetadataSocket as unknown as typeof WebSocket;
-        globalThis.fetch = (async () => { throw new Error("unexpected HTTP request"); }) as typeof fetch;
+    await withPoolHome(async () => {
+      savePoolCredential("pool-ws-replaced");
+      const credentialGeneration = readCodexAccountRecord("pool-ws-replaced")?.generation;
+      expect(credentialGeneration).toBeDefined();
+      const writerGeneration = captureConfigGeneration();
+      const owner = new CodexWsMetadata(headers => {
+        if (!isCodexAccountGenerationLive("pool-ws-replaced", credentialGeneration!)) return;
+        applyAccountQuotaFromUpstreamHeaders("pool-ws-replaced", headers, writerGeneration);
+      });
+      owner.commit();
+      owner.consume({ type: "codex.rate_limits", rate_limits: {
+        primary: { used_percent: 10, window_minutes: 10080 },
+      } }, 100);
+      expect(getAccountQuota("pool-ws-replaced")?.weeklyPercent).toBe(10);
+
+      savePoolCredential("pool-ws-replaced");
+      clearAccountQuota("pool-ws-replaced");
+      owner.consume({ type: "codex.rate_limits", rate_limits: {
+        primary: { used_percent: 100, window_minutes: 10080 },
+      } }, 100);
+      owner.finish();
+      expect(getAccountQuota("pool-ws-replaced")).toBeNull();
+
+      const sockets: unknown[] = [];
+      const originalWebSocket = globalThis.WebSocket;
+      globalThis.WebSocket = class {
+        constructor() { sockets.push(this); }
+      } as unknown as typeof WebSocket;
+      globalThis.fetch = (async () => new Response(
+        `data: ${JSON.stringify({ type: "response.completed", response: {
+          id: "quota-response", status: "completed", output: [],
+        } })}\n\n`,
+        { status: 200, headers: {
+          "content-type": "text/event-stream",
+          "x-codex-primary-used-percent": "10",
+          "x-codex-primary-window-minutes": "10080",
+        } },
+      )) as typeof fetch;
+      try {
+        savePoolCredential("pool-http-canonical");
         const response = await handleResponses(new Request("http://localhost/v1/responses", {
           method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: true }),
-        }), poolConfig(["pool-ws-replaced"]), { model: "", provider: "" }, {
+        }), poolConfig(["pool-http-canonical"]), { model: "", provider: "" }, {
           codexWsRuntimeIdentity: "1.4.0",
         });
-        expect(getAccountQuota("pool-ws-replaced")?.weeklyPercent).toBe(10);
-
-        savePoolCredential("pool-ws-replaced");
-        clearAccountQuota("pool-ws-replaced");
-        releaseFinalQuota();
+        expect(sockets).toHaveLength(0);
+        expect(response.status).toBe(200);
         await response.text();
-
-        expect(getAccountQuota("pool-ws-replaced")).toBeNull();
-      });
-    } finally {
-      releaseFinalQuota();
-      globalThis.WebSocket = originalWebSocket;
-    }
+        expect(getAccountQuota("pool-http-canonical")?.weeklyPercent).toBe(10);
+      } finally {
+        globalThis.WebSocket = originalWebSocket;
+      }
+    });
   });
 
   test("main-pool and legacy added accounts carry their effective labels", async () => {
