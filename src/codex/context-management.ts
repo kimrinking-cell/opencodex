@@ -11,6 +11,7 @@ import { trustedAccountBoundNativeCatalogSlug } from "./catalog/account-models";
 import upstreamModels from "./data/upstream-models.json";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { contextFailureReportGuidance, REPORT_MODELS } from "./context-failure-report";
+import { contextContinuityReceiptGuidance } from "./context-continuity-receipt";
 
 /** Explicit native identities: a routed provider's GPT-shaped name is not eligible. */
 export const GPT_CONTEXT_MODELS: ReadonlySet<string> = new Set(REPORT_MODELS);
@@ -49,7 +50,7 @@ export function gptContextManagementEnabled(config: Pick<OcxConfig, "gptContextM
 }
 
 export function contextSelfReportGuidance(model: string): string {
-  return contextFailureReportGuidance(model, join(getConfigDir(), "context-failure-reports"));
+  return `${contextContinuityReceiptGuidance(model, join(getConfigDir(), "context-continuity"))}\n\n${contextFailureReportGuidance(model, join(getConfigDir(), "context-failure-reports"))}`;
 }
 
 /** Use Codex's model defaults, not a global flag which also activates routed models. */

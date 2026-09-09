@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,10 +10,17 @@ import {
   writeContextFailureReportWithEvidence,
   type ContextFailureInput,
 } from "../../src/codex/context-failure-report";
+import {
+  contextContinuityReceiptGuidance,
+  issueContinuityCheckpoint,
+  parseContextContinuityArgs,
+  verifyContinuityCheckpoint,
+} from "../../src/codex/context-continuity-receipt";
 let root: string;
 let fixtureNumber = 0;
 const input: ContextFailureInput = { model: "gpt-5.6-sol", window: "01a0717f-2ad9-7732-8a0d-054e5b0df245", stage: "post_reset", reason: "notes_error", outcome: "recovered" };
 const THREAD_ID = "01a0717f-2ad9-7732-8a0d-054e5b0df246";
+const DESTINATION_WINDOW = "01a0717f-2ad9-7732-8a0d-054e5b0df247";
 const BACKEND_FAILURE = "Unable to perform operation: The backend request failed.";
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "ocx-context-report-")); fixtureNumber = 0; });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
@@ -40,6 +47,63 @@ function currentSessionLines(...payloads: Record<string, unknown>[]): string[] {
     rolloutLine({ type: "message", role: "user", context_window_id: input.window }),
     ...payloads.map(payload => rolloutLine(payload)),
   ];
+}
+
+const encryptedOutput = [{ type: "encrypted_content", encrypted_content: "fixture-encrypted-output" }];
+
+function checkpointText(token: string): string {
+  return `token: ${token}\ngoal: continue the real task\nuser_constraints: preserve user files\nverified_state: focused checks passed\nnext_action: run the next focused check\n`;
+}
+
+function appendTransition(
+  env: NodeJS.ProcessEnv,
+  token: string,
+  options: {
+    writePath?: string;
+    writeText?: string;
+    readback?: boolean;
+    recovery?: "note" | "history" | "list" | "none";
+    recoveryOutputAfterTask?: boolean;
+    taskOutput?: unknown;
+  } = {},
+): void {
+  const path = join(env.CODEX_HOME!, "rollout.jsonl");
+  const writePath = options.writePath ?? "continuity/current.md";
+  const writeText = options.writeText ?? checkpointText(token);
+  const lines = [
+    rolloutLine({ type: "function_call", namespace: "notes", name: "write_file", arguments: JSON.stringify({ path: writePath, text: writeText }), call_id: "checkpoint-write" }),
+    rolloutLine({ type: "function_call_output", call_id: "checkpoint-write", output: encryptedOutput }),
+  ];
+  if (options.readback !== false) {
+    lines.push(
+      rolloutLine({ type: "function_call", namespace: "notes", name: "read_file", arguments: JSON.stringify({ path: "continuity/current.md" }), call_id: "checkpoint-readback" }),
+      rolloutLine({ type: "function_call_output", call_id: "checkpoint-readback", output: encryptedOutput }),
+    );
+  }
+  lines.push(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    type: "compacted",
+    payload: { window_id: DESTINATION_WINDOW, previous_window_id: input.window, first_window_id: input.window },
+  }));
+  const recovery = options.recovery ?? "note";
+  let deferredRecoveryOutput: string | undefined;
+  if (recovery !== "none") {
+    const payload = recovery === "note"
+      ? { type: "function_call", namespace: "notes", name: "read_file", arguments: JSON.stringify({ path: "continuity/current.md" }), call_id: "recovery-read" }
+      : recovery === "history"
+        ? { type: "function_call", namespace: "history", name: "search_contents", arguments: JSON.stringify({ query: "continuity/current.md", window_id: input.window }), call_id: "recovery-read" }
+        : { type: "function_call", namespace: "notes", name: "list_files_by_prefix", arguments: "{}", call_id: "recovery-read" };
+    lines.push(rolloutLine(payload));
+    const output = rolloutLine({ type: "function_call_output", call_id: "recovery-read", output: encryptedOutput });
+    if (options.recoveryOutputAfterTask) deferredRecoveryOutput = output;
+    else lines.push(output);
+  }
+  lines.push(
+    rolloutLine({ type: "custom_tool_call", name: "functions.exec", input: "run one real task check", call_id: "task-action" }),
+    rolloutLine({ type: "custom_tool_call_output", call_id: "task-action", output: options.taskOutput ?? "Script completed" }),
+  );
+  if (deferredRecoveryOutput) lines.push(deferredRecoveryOutput);
+  appendFileSync(path, `${lines.join("\n")}\n`);
 }
 
 test("reports bounded metadata and deduplicates retries without erasing later recovery", () => {
@@ -190,4 +254,107 @@ test("guidance keeps recovery and persistence claims unverified and preserves le
   expect(guidance).toContain("Never claim recovered independently");
   expect(guidance).toContain("encrypted payloads");
   expect(parseContextFailureArgs(["--store", root, "--model", "gpt-5.6-sol", "--window", "unknown", "--stage", "post_reset", "--reason", "checkpoint_missing", "--outcome", "recovered"]).input.window).toBe("unknown");
+});
+
+test("records a private continuity receipt only after an exact checkpoint round trip and real continuation", async () => {
+  const env = makeStateFixture(currentSessionLines());
+  const directory = join(root, "continuity-success");
+  const checkpoint = issueContinuityCheckpoint(directory, input.model, input.window, env);
+  expect(checkpoint.issued).toBe(true);
+  expect(checkpoint.token).toMatch(/^[a-f0-9]{32}$/);
+  const stateFile = join(directory, "state", readdirSync(join(directory, "state"))[0]!);
+  expect(readFileSync(stateFile, "utf8")).not.toContain(checkpoint.token);
+  appendTransition(env, checkpoint.token);
+
+  const result = await verifyContinuityCheckpoint(directory, input.model, DESTINATION_WINDOW, checkpoint.token, env);
+  expect(result).toMatchObject({ recorded: true, duplicate: false, status: "verified" });
+  const receipt = JSON.parse(readFileSync(result.file!, "utf8"));
+  expect(receipt).toMatchObject({
+    source: "local_context_continuity_guard",
+    independently_verified: true,
+    semantic_task_recovery: "unverified",
+    checkpoint_write_observed: true,
+    checkpoint_readback_observed: true,
+    recovery_read_observed: true,
+    task_action_observed: true,
+    outcome: "healthy",
+  });
+  expect(readFileSync(result.file!, "utf8")).not.toContain(checkpoint.token);
+  expect(await verifyContinuityCheckpoint(directory, input.model, DESTINATION_WINDOW, checkpoint.token, env))
+    .toMatchObject({ recorded: true, duplicate: true, status: "verified" });
+  const script = join(import.meta.dir, "../../src/codex/context-continuity-receipt.ts");
+  const cli = Bun.spawnSync([
+    process.execPath, script, "verify", "--store", directory, "--model", input.model,
+    "--window", DESTINATION_WINDOW, "--token", checkpoint.token,
+  ], { env });
+  expect(cli.exitCode).toBe(0);
+  expect(JSON.parse(cli.stdout.toString())).toEqual({ recorded: true, duplicate: true, status: "verified" });
+  expect(cli.stdout.toString()).not.toContain(directory);
+  expect(cli.stdout.toString()).not.toContain(checkpoint.token);
+  if (process.platform !== "win32") {
+    expect(statSync(stateFile).mode & 0o777).toBe(0o600);
+    expect(statSync(join(directory, "state")).mode & 0o777).toBe(0o700);
+    expect(statSync(result.file!).mode & 0o777).toBe(0o600);
+  }
+});
+
+test("accepts a targeted History fallback but not a generic post-reset listing", async () => {
+  const historyEnv = makeStateFixture(currentSessionLines());
+  const historyDirectory = join(root, "continuity-history");
+  const historyCheckpoint = issueContinuityCheckpoint(historyDirectory, input.model, input.window, historyEnv);
+  appendTransition(historyEnv, historyCheckpoint.token, { recovery: "history" });
+  expect(await verifyContinuityCheckpoint(historyDirectory, input.model, DESTINATION_WINDOW, historyCheckpoint.token, historyEnv))
+    .toMatchObject({ recorded: true, status: "verified" });
+
+  const listEnv = makeStateFixture(currentSessionLines());
+  const listDirectory = join(root, "continuity-list");
+  const listCheckpoint = issueContinuityCheckpoint(listDirectory, input.model, input.window, listEnv);
+  appendTransition(listEnv, listCheckpoint.token, { recovery: "list" });
+  expect(await verifyContinuityCheckpoint(listDirectory, input.model, DESTINATION_WINDOW, listCheckpoint.token, listEnv))
+    .toEqual({ recorded: false, duplicate: false, status: "inconclusive", reason: "recovery_read_unverified" });
+});
+
+test("rejects unrelated or incomplete checkpoint evidence instead of producing false success", async () => {
+  const cases: Array<{
+    name: string;
+    options: Parameters<typeof appendTransition>[2];
+    reason: string;
+  }> = [
+    { name: "wrong path", options: { writePath: "continuity/other.md" }, reason: "checkpoint_write_unverified" },
+    { name: "missing token", options: { writeText: checkpointText("0".repeat(32)) }, reason: "checkpoint_write_unverified" },
+    { name: "missing field", options: { writeText: "token: TOKEN\ngoal: fixture\nuser_constraints: fixture\nverified_state: fixture\n" }, reason: "checkpoint_write_unverified" },
+    { name: "no readback", options: { readback: false }, reason: "checkpoint_readback_unverified" },
+    { name: "no recovery", options: { recovery: "none" }, reason: "recovery_read_unverified" },
+    { name: "task before recovery", options: { recoveryOutputAfterTask: true }, reason: "task_continuation_unverified" },
+    { name: "failed task tool", options: { taskOutput: BACKEND_FAILURE }, reason: "task_continuation_unverified" },
+  ];
+  for (const [index, item] of cases.entries()) {
+    const env = makeStateFixture(currentSessionLines());
+    const directory = join(root, `continuity-negative-${index}`);
+    const checkpoint = issueContinuityCheckpoint(directory, input.model, input.window, env);
+    const options = item.name === "missing field"
+      ? { ...item.options, writeText: (item.options.writeText as string).replace("TOKEN", checkpoint.token) }
+      : item.options;
+    appendTransition(env, checkpoint.token, options);
+    expect(await verifyContinuityCheckpoint(directory, input.model, DESTINATION_WINDOW, checkpoint.token, env), item.name)
+      .toEqual({ recorded: false, duplicate: false, status: "inconclusive", reason: item.reason });
+    expect(readdirSync(directory)).not.toContain("receipts");
+  }
+});
+
+test("rejects same-window, wrong-token, and malformed CLI verification without leaking arguments", async () => {
+  const env = makeStateFixture(currentSessionLines());
+  const directory = join(root, "continuity-identity");
+  const checkpoint = issueContinuityCheckpoint(directory, input.model, input.window, env);
+  expect(await verifyContinuityCheckpoint(directory, input.model, input.window, checkpoint.token, env))
+    .toMatchObject({ status: "inconclusive", reason: "same_window" });
+  expect(await verifyContinuityCheckpoint(directory, input.model, DESTINATION_WINDOW, "0".repeat(32), env))
+    .toMatchObject({ status: "inconclusive", reason: "token_mismatch" });
+  expect(() => parseContextContinuityArgs(["verify", "--store", directory, "--token", "sensitive-fixture"]))
+    .toThrow("Missing context continuity arguments");
+  const guidance = contextContinuityReceiptGuidance(input.model, directory);
+  expect(guidance).toContain("during real work, never synthetic test work");
+  expect(guidance).toContain("token: <Returned-token>");
+  expect(guidance).toContain("semantic task correctness");
+  expect(guidance).toContain("An inconclusive result is not a failure");
 });
