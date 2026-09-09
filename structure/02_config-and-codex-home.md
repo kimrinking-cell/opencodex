@@ -83,6 +83,31 @@ to SQLite ownership; the tolerant root-string helper used by injection and catal
 - 다른 대안 대신 이 방식을 선택한 이유: A writer-only override would let ownership checks authorize one database while the mutation touched another.
 - 장점, 단점 및 영향: Split-home history remains correct and backup identities stay database-specific; storage cleanup of an external root remains out of scope.
 
+## Experimental context continuity receipts
+
+When GPT context management is enabled for native Sol or Astra, OpenCodex injects a passive
+continuity protocol alongside the existing failure self-report guidance. A model may issue a
+checkpoint only at a verified milestone of substantive unfinished work. The opaque token must be
+written with the compact task state to native Notes at `continuity/current.md` and read back before
+the context changes. The local checkpoint under `$OPENCODEX_HOME/context-continuity/state/` stores
+only the token hash and bounded identifiers, not the note text or token.
+
+After a real compacted-window transition, a healthy receipt is admitted only when the same rollout
+proves the exact checkpoint write and readback, a targeted Notes read or History search in the new
+window, exact token recovery, and a completed ordinary task tool action. Receipts live under
+`$OPENCODEX_HOME/context-continuity/receipts/`; they mark semantic task recovery as unverified.
+Missing checkpoints, same-window attempts, generic listings, incomplete or encrypted evidence that
+cannot satisfy the bounded contract, and harmless corrected arguments remain inconclusive rather
+than healthy or failed. The separate context-failure reporter remains the incident path.
+
+[Decision Log]
+- 목적과 의도: Measure whether normal unfinished work survives actual context transitions without creating disposable test sessions or counting model confidence as success.
+- 기존 구현 및 제약 조건: Failure self-reports supplied no healthy denominator, and a completed Notes or History call alone could not prove that the checkpoint token or real task continuation survived.
+- 검토한 주요 대안: Count all self-reported recovery outcomes, periodically force synthetic resets, trust any post-reset read, or correlate one opaque token with a narrow rollout evidence chain.
+- 선택한 방식: Issue sparse milestone tokens, require an exact structured Notes round trip, and record a local success receipt only after the compacted chain, targeted recovery read, token proof, and subsequent task action all agree.
+- 다른 대안 대신 이 방식을 선택한 이유: Passive sparse checkpoints preserve ordinary work, while exact correlation removes unsupported missing-checkpoint claims and generic-read false positives without storing task contents locally.
+- 장점, 단점 및 영향: Verified receipts provide a conservative mechanical success count; semantic correctness and encrypted tool output contents remain explicitly unverified, so some healthy transitions can stay inconclusive.
+
 Native-main profile ownership is bound to the real `CODEX_HOME`, not to an OpenCodex instance.
 Its encrypted vault, transaction journal, recovery marker, and referenced quarantine files live in
 the owner-only `.opencodex-native-main-profiles` directory. The unchanged
