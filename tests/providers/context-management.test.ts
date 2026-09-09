@@ -111,7 +111,11 @@ describe("native GPT catalog opt-in", () => {
       expect(messages.token_budget.use_history_notes_extension).toBe(row.experimental);
       expect(models[i]!.supports_experimental_context).toBe(row.experimental);
       expect(messages.token_budget.guidance_message.includes("context-failure-report.ts")).toBe(row.experimental);
-      if (row.experimental) expect(messages.token_budget.guidance_message).toContain("**컨텍스트 복구 문제 감지 — 미해결**");
+      expect(messages.token_budget.guidance_message.includes("context-continuity-receipt.ts")).toBe(row.experimental);
+      if (row.experimental) {
+        expect(messages.token_budget.guidance_message).toContain("continuity/current.md");
+        expect(messages.token_budget.guidance_message).toContain("**컨텍스트 복구 문제 감지 — 미해결**");
+      }
       expect(messages.instructions_template).toBe((original[i]!.model_messages as Record<string, unknown>).instructions_template);
     });
     expect(models.slice(rows.length)).toEqual(original.slice(rows.length));
@@ -349,6 +353,7 @@ test("actual Responses wire carries self-report guidance only in active Sol/Astr
       const wire = captured.at(-1)!;
       expect(wire).toContain(model);
       expect(wire.includes("context-failure-report.ts")).toBe(experimental);
+      expect(wire.includes("context-continuity-receipt.ts")).toBe(experimental);
       expect(wire.includes("**컨텍스트 복구 문제 감지 — 복구 완료**")).toBe(experimental);
     }
   } finally { globalThis.fetch = originalFetch; }
