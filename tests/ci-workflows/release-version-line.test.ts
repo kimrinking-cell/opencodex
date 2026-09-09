@@ -87,6 +87,12 @@ function tagIsAncestorOfHead(tag: string): boolean {
   return git(["merge-base", "--is-ancestor", tag, "HEAD"]).ok;
 }
 
+function localPortBaseTag(version: string, tags: string[], localPortBuild = Bun.env.OPENCODEX_LOCAL_PORT_BUILD === "1"): string | null {
+  if (!localPortBuild) return null;
+  const tag = `v${version}`;
+  return tags.includes(tag) ? tag : null;
+}
+
 describe("release version line", () => {
   test("package.json carries a parseable SemVer version", () => {
     expect(inTreeVersion()).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
@@ -103,15 +109,17 @@ describe("release version line", () => {
     const highest = highestReleaseTag(tags);
     expect(highest).not.toBeNull();
 
+    const localBase = localPortBaseTag(version, tags);
+    if (localBase) {
+      expect(
+        tagIsAncestorOfHead(localBase),
+        "local port version " + version + " must descend from its matching release tag " + localBase,
+      ).toBe(true);
+      return;
+    }
+
     const ordering = compareReleaseTags("v" + version, highest!);
     if (ordering === 0) {
-      if (Bun.env.OPENCODEX_LOCAL_PORT_BUILD === "1") {
-        expect(
-          tagIsAncestorOfHead(highest!),
-          "local port version " + version + " must descend from release tag " + highest,
-        ).toBe(true);
-        return;
-      }
       // Legal only on the release commit that tag names.
       expect(
         tagPointsAtHead(highest!),
@@ -144,5 +152,12 @@ describe("release version line", () => {
     expect(compareReleaseTags("v2.35.0-preview.1", "v2.34.0")).toBeGreaterThan(0);
     // ...but a prerelease of the SAME core is behind its own stable release.
     expect(compareReleaseTags("v2.34.0-preview.1", "v2.34.0")).toBeLessThan(0);
+  });
+
+  test("a local port stays bound to its exact release tag after a newer release", () => {
+    const tags = ["v2.48.0", "v2.49.0"];
+    expect(localPortBaseTag("2.48.0", tags, true)).toBe("v2.48.0");
+    expect(localPortBaseTag("2.48.0", tags, false)).toBeNull();
+    expect(localPortBaseTag("2.47.0", tags, true)).toBeNull();
   });
 });
