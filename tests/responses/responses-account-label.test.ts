@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fallbackCodexAccountLogLabel } from "../../src/codex/account-label";
-import { isCodexAccountGenerationLive, readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
+import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountQuota, getAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
 import {
@@ -13,11 +13,11 @@ import {
 } from "../../src/codex/routing";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { handleResponses } from "../../src/server/responses";
-import type { OcxConfig } from "../../src/types";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import type { CodexWsQuotaObserver } from "../../src/server/responses/codex-ws-metadata";
 import { CodexWsMetadata } from "../../src/server/responses/codex-ws-metadata";
 import { applyAccountQuotaFromUpstreamHeaders } from "../../src/codex/quota";
-import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
+import type { OcxConfig } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 
@@ -170,43 +170,65 @@ describe("Responses account usage attribution", () => {
   test("late WS quota from a replaced pool credential cannot repopulate cleared state", async () => {
     await withPoolHome(async () => {
       savePoolCredential("pool-ws-replaced");
-      const credentialGeneration = readCodexAccountRecord("pool-ws-replaced")?.generation;
-      expect(credentialGeneration).toBeDefined();
-      const writerGeneration = captureConfigGeneration();
-      const owner = new CodexWsMetadata(headers => {
-        if (!isCodexAccountGenerationLive("pool-ws-replaced", credentialGeneration!)) return;
-        applyAccountQuotaFromUpstreamHeaders("pool-ws-replaced", headers, writerGeneration);
-      });
-      owner.commit();
-      owner.consume({ type: "codex.rate_limits", rate_limits: {
-        primary: { used_percent: 10, window_minutes: 10080 },
-      } }, 100);
-      expect(getAccountQuota("pool-ws-replaced")?.weeklyPercent).toBe(10);
-
-      savePoolCredential("pool-ws-replaced");
-      clearAccountQuota("pool-ws-replaced");
-      owner.consume({ type: "codex.rate_limits", rate_limits: {
-        primary: { used_percent: 100, window_minutes: 10080 },
-      } }, 100);
-      owner.finish();
-      expect(getAccountQuota("pool-ws-replaced")).toBeNull();
+      const generationBefore = readCodexAccountRecord("pool-ws-replaced")?.generation;
+      expect(generationBefore).toBeDefined();
 
       const sockets: unknown[] = [];
       const originalWebSocket = globalThis.WebSocket;
       globalThis.WebSocket = class {
         constructor() { sockets.push(this); }
       } as unknown as typeof WebSocket;
-      globalThis.fetch = (async () => new Response(
-        `data: ${JSON.stringify({ type: "response.completed", response: {
-          id: "quota-response", status: "completed", output: [],
-        } })}\n\n`,
-        { status: 200, headers: {
-          "content-type": "text/event-stream",
-          "x-codex-primary-used-percent": "10",
-          "x-codex-primary-window-minutes": "10080",
-        } },
-      )) as typeof fetch;
+
+      let capturedQuota: CodexWsQuotaObserver | undefined;
       try {
+        const prepared = await handleResponses(new Request("http://localhost/v1/responses", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: true }),
+        }), poolConfig(["pool-ws-replaced"]), { model: "", provider: "" }, {
+          codexWsRuntimeIdentity: "1.4.0",
+          preparedRequestTransport: async context => {
+            capturedQuota = context.onCodexWsQuota;
+            return {
+              response: new Response(
+                `data: ${JSON.stringify({ type: "response.completed", response: {
+                  id: "quota-prepare", status: "completed", output: [],
+                } })}\n\n`,
+                { status: 200, headers: { "content-type": "text/event-stream" } },
+              ),
+            };
+          },
+        });
+        expect(prepared.status).toBe(200);
+        await prepared.text();
+        expect(capturedQuota).toBeTypeOf("function");
+        expect(sockets).toHaveLength(0);
+
+        const owner = new CodexWsMetadata(capturedQuota);
+        owner.commit();
+        owner.consume({ type: "codex.rate_limits", rate_limits: {
+          primary: { used_percent: 10, window_minutes: 10080 },
+        } }, 100);
+        expect(getAccountQuota("pool-ws-replaced")?.weeklyPercent).toBe(10);
+
+        savePoolCredential("pool-ws-replaced");
+        expect(readCodexAccountRecord("pool-ws-replaced")?.generation).not.toBe(generationBefore);
+        clearAccountQuota("pool-ws-replaced");
+        owner.consume({ type: "codex.rate_limits", rate_limits: {
+          primary: { used_percent: 100, window_minutes: 10080 },
+        } }, 100);
+        owner.finish();
+        expect(getAccountQuota("pool-ws-replaced")).toBeNull();
+
+        globalThis.fetch = (async () => new Response(
+          `data: ${JSON.stringify({ type: "response.completed", response: {
+            id: "quota-response", status: "completed", output: [],
+          } })}\n\n`,
+          { status: 200, headers: {
+            "content-type": "text/event-stream",
+            "x-codex-primary-used-percent": "10",
+            "x-codex-primary-window-minutes": "10080",
+          } },
+        )) as typeof fetch;
         savePoolCredential("pool-http-canonical");
         const response = await handleResponses(new Request("http://localhost/v1/responses", {
           method: "POST", headers: { "content-type": "application/json" },
