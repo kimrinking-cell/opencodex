@@ -187,9 +187,10 @@ export const NATIVE_GPT6_ASTRA_REASONING_EFFORTS = [
 ] as const;
 
 /**
- * Correct pinned and persisted native rows at the product projection boundary.
- * Keep the pinned snapshot byte-identical for provenance while removing its
- * unsupported Astra-only `ultra` presentation rung from the Codex catalog.
+ * Codex's Ultra is a client mode, not an API reasoning-effort value. Preserve
+ * that shipped catalog rung alongside the API efforts: Codex resolves it to
+ * multi_agent_reasoning_effort before making the provider request.
+ * Restore it on persisted rows previously narrowed to the API-only ladder.
  */
 export function normalizeNativeOpenAiReasoningLevels(entry: RawEntry): RawEntry {
   if (entry.slug !== NATIVE_GPT6_ASTRA_MODEL) return entry;
@@ -202,7 +203,7 @@ export function normalizeNativeOpenAiReasoningLevels(entry: RawEntry): RawEntry 
   );
   return {
     ...entry,
-    supported_reasoning_levels: NATIVE_GPT6_ASTRA_REASONING_EFFORTS.map(effort => (
+    supported_reasoning_levels: [...NATIVE_GPT6_ASTRA_REASONING_EFFORTS, "ultra"].map(effort => (
       existing.get(effort)
         ?? CODEX_REASONING_LEVELS.find(level => level.effort === effort)
         ?? { effort, description: `${effort} reasoning` }

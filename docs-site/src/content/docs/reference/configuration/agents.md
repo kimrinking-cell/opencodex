@@ -60,6 +60,11 @@ Subagents dashboard's **Always proactive delegation** toggle requires both the n
 an explicit v2 surface (`multiAgentMode: "v2"`, equivalent to `ocx v2 mode v2`);
 `ocx v2 on` alone does not satisfy that dashboard gate.
 
+The **Ultra** entry in Codex's reasoning selector is separate from this always-proactive
+override. Astra supports this client mode as well: its catalog includes `ultra`, while
+Codex resolves the selection to the model's configured multi-agent reasoning effort
+before calling the provider. It is not an additional value in Astra's API effort enum.
+
 `GET` and `PUT /api/v2` also return `multiAgentModeHintRecommendation: { text, revision }`.
 The dashboard uses this server-provided text when enabling or restoring the preset, with no
 hardcoded fallback. If an older server omits the recommendation or returns a malformed value,

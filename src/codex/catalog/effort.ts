@@ -267,7 +267,7 @@ export function applyReasoningLevels(
  *
  * The name is historical: membership is about preserving the projected ladder, not requiring six
  * rungs. `gpt-6-astra` qualifies so the generic native fallback cannot truncate its official
- * low/medium/high/xhigh/max ladder or synthesize `ultra`.
+ * low/medium/high/xhigh/max ladder or drop its shipped Codex `ultra` mode.
  */
 export function isGpt56NativeSlug(slug: string): boolean {
   if (slug.includes("/")) return false;
