@@ -399,7 +399,9 @@ describe("a combo shadow-call target enters the failover loop (#4129)", () => {
 
     const config = comboInterceptConfig([{ provider: "xai", model: "grok-4.5" }]);
     config.shadowCallIntercept = { enabled: true, model: "xai/grok-4.5" };
-    const response = await post(config, "gpt-5.6-luna", "turn", logCtx);
+    // Use an explicit helper request. Foreground Luna `turn` requests are intentionally
+    // preserved by the newer interception policy and are covered separately above.
+    const response = await post(config, "gpt-5.6-luna", "memory", logCtx);
 
     expect(response.ok).toBe(true);
     expect(urls).toHaveLength(1);
