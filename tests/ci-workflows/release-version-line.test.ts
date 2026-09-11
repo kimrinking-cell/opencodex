@@ -33,6 +33,7 @@ const repoRoot = resolveRepoRoot();
 
 /** Release tags shaped vX.Y.Z[-pre]. Non-release tags are ignored, not an error. */
 const RELEASE_TAG = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const STABLE_RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
 
 function git(args: string[]): { ok: boolean; out: string } {
   const result = Bun.spawnSync(["git", ...args], { cwd: repoRoot });
@@ -93,7 +94,13 @@ describe("release version line", () => {
   });
 
   test("the in-tree version is never behind a released one", () => {
-    const tags = localReleaseTags();
+    const allTags = localReleaseTags();
+    // The updater prepares only exact stable tags. A future preview can coexist in the fetched
+    // tag set without making an older stable port a version regression; normal release CI keeps
+    // comparing every channel tag.
+    const tags = Bun.env.OPENCODEX_LOCAL_PORT_BUILD === "1"
+      ? allTags.filter(tag => STABLE_RELEASE_TAG.test(tag))
+      : allTags;
     // A checkout with no tags cannot answer the question. CI fetches tags explicitly for
      // the jobs that run this suite (see .github/workflows/ci.yml), so an empty set here
     // means a tarball or a hand-made shallow clone, not a silently unprotected pipeline.
