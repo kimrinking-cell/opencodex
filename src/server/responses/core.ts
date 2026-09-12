@@ -4020,7 +4020,10 @@ async function handleResponsesInner(
   let callerAuthHeaders: Headers;
   const contextSessionId = contextSessionFromHeaders(req.headers);
   if (contextSessionId) {
-    if (!gptContextManagementEnabled(config) || !GPT_CONTEXT_MODELS.has(route.modelId)
+    if (!gptContextManagementEnabled(config)) {
+      return formatErrorResponse(409, "experimental_context_disabled", "Experimental Notes/History context is disabled. Start a new session using standard compaction; an old account-bound context cannot be migrated by switching accounts.");
+    }
+    if (!GPT_CONTEXT_MODELS.has(route.modelId)
       || route.providerName !== "openai" || !isCanonicalOpenAiForwardProvider(route.provider)) {
       return formatErrorResponse(409, "context_model_unsupported", "This experimental context requires native GPT Sol or Astra; start a new session for Luna, Terra or another provider");
     }

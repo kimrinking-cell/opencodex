@@ -56,6 +56,12 @@ export function contextSelfReportGuidance(model: string): string {
 /** Use Codex's model defaults, not a global flag which also activates routed models. */
 export function applyGptContextManagement(models: RawEntry[], config: OcxConfig): void {
   const enabled = gptContextManagementEnabled(config);
+  // An explicit opt-out is a policy, not an uninstall: restoring an upstream
+  // token budget here can advertise Notes/History again after catalog sync.
+  const provider = config.providers.openai;
+  const explicitLegacyMode = config.gptContextManagement === false
+    && !!provider && provider.disabled !== true
+    && isCanonicalOpenAiForwardProvider(provider);
   const source = (upstreamModels.models as RawEntry[]).find(row => row.slug === "gpt-6-astra");
   const sourceMessages = source?.model_messages as Record<string, unknown> | undefined;
   const defaults = sourceMessages?.token_budget as Record<string, unknown> | undefined;
@@ -65,20 +71,20 @@ export function applyGptContextManagement(models: RawEntry[], config: OcxConfig)
     const nativeSelector = trustedAccountBoundNativeCatalogSlug(row);
     const slug = nativeSelector ?? row.slug;
     if (row.opencodex_catalog_kind && !nativeSelector) continue;
-    if (!enabled || typeof slug !== "string" || (!GPT_CONTEXT_MODELS.has(slug) && !LEGACY_CONTEXT_MODELS.has(slug))
+    if ((!enabled && !explicitLegacyMode) || typeof slug !== "string" || (!GPT_CONTEXT_MODELS.has(slug) && !LEGACY_CONTEXT_MODELS.has(slug))
       || typeof row.slug !== "string" || (row.slug.includes("/") && !nativeSelector)) continue;
     const own = row.model_messages && typeof row.model_messages === "object"
       ? row.model_messages as Record<string, unknown> : {};
     row[CATALOG_MARKER] = own.token_budget ?? null;
-    const experimental = GPT_CONTEXT_MODELS.has(slug);
     row[CONTEXT_SUPPORT_MARKER] = Object.hasOwn(row, "supports_experimental_context")
       ? row.supports_experimental_context : null;
-    row.supports_experimental_context = experimental;
+    // Keep the deployed legacy-compaction policy, including explicit opt-out.
+    // Use false rather than absence so native capability defaults cannot win.
+    row.supports_experimental_context = false;
     row.model_messages = { ...own, token_budget: {
       ...defaults,
-      enabled: experimental,
-      use_history_notes_extension: experimental,
-      ...(experimental ? { guidance_message: `${defaults!.guidance_message}\n\n${contextSelfReportGuidance(slug)}` } : {}),
+      enabled: false,
+      use_history_notes_extension: false,
     } };
   }
 }

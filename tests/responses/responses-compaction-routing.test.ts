@@ -10,7 +10,7 @@ import { afterEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleResponses, handleResponsesCompact } from "../../src/server/responses";
+import { handleResponses, handleResponsesCompact, nativeCompactOutputIsUsable } from "../../src/server/responses";
 import { OPAQUE_COMPACTION_NOTE, SUMMARY_PREFIX } from "../../src/responses/compaction";
 import { externalTaskInputContent } from "../../src/responses/task-input";
 import { looksLikeBackendCiphertext } from "../../src/server/responses/encrypted-payload";
@@ -137,6 +137,20 @@ function completedPayload(text: string): Record<string, unknown> {
     usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
   };
 }
+
+/** The native compact endpoint returns an opaque compaction, not a normal reply. */
+function completedCompactPayload(text: string): Record<string, unknown> {
+  return { ...completedPayload(text), output: [{ type: "compaction", encrypted_content: `fixture-compact:${text}` }] };
+}
+
+test("native compact success requires a nonempty compaction instead of an empty window or ordinary reply", () => {
+  for (const payload of [{ output: [] }, completedPayload("not a compaction"),
+    { output: [{ type: "compaction", encrypted_content: "" }] }]) {
+    expect(nativeCompactOutputIsUsable(JSON.stringify(payload))).toBe(false);
+  }
+  expect(nativeCompactOutputIsUsable(JSON.stringify(completedCompactPayload("summary")))).toBe(true);
+  expect(nativeCompactOutputIsUsable("not-json")).toBe(false);
+});
 
 function sseResponse(events: Array<Record<string, unknown>>): Response {
   const body = events.map(e => `event: ${String(e.type)}\ndata: ${JSON.stringify(e)}\n\n`).join("");
@@ -355,7 +369,7 @@ describe("native compact usage reporting", () => {
         },
       },
     } as unknown as OcxConfig;
-    globalThis.fetch = (async () => jsonResponse(completedPayload("native summary"))) as typeof fetch;
+    globalThis.fetch = (async () => jsonResponse(completedCompactPayload("native summary"))) as typeof fetch;
     const logCtx: RequestLogContext = { model: "", provider: "" };
     const response = await handleResponsesCompact(
       compactionRequest(baseCompactionBody({ model: "openai-apikey/gpt-5.5" })),
@@ -382,7 +396,7 @@ describe("native compact usage reporting", () => {
         tokens: { access_token: "main-access-token", account_id: "main-account" },
       }));
       updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 0);
-      globalThis.fetch = (async () => jsonResponse(completedPayload("main compact"))) as typeof fetch;
+      globalThis.fetch = (async () => jsonResponse(completedCompactPayload("main compact"))) as typeof fetch;
       const mainLog: RequestLogContext = { model: "", provider: "" };
       expect((await handleResponsesCompact(compactionRequest(baseCompactionBody({})), mainConfig, mainLog)).status).toBe(200);
       expect(mainLog.accountLogLabel).toBe("main");
@@ -444,7 +458,7 @@ describe("native Codex pool compaction", () => {
             headers: { "x-codex-primary-reset-at": String(resetAt) },
           });
         }
-        return jsonResponse(completedPayload("Terra compact response"));
+        return jsonResponse(completedCompactPayload("Terra compact response"));
       }) as typeof fetch;
       const spark = await handleResponsesCompact(
         compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" })),
@@ -1237,7 +1251,7 @@ describe("compact alternate-account attempt (#913)", () => {
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
         observedUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         observedHeaders = new Headers(init?.headers);
-        return jsonResponse(completedPayload("canonical compact response"));
+        return jsonResponse(completedCompactPayload("canonical compact response"));
       }) as typeof fetch;
 
       const res = await handleResponsesCompact(
@@ -1266,7 +1280,7 @@ describe("compact alternate-account attempt (#913)", () => {
               headers: { "retry-after": "42" },
             });
           }
-          return jsonResponse(completedPayload("alternate compact response"));
+          return jsonResponse(completedCompactPayload("alternate compact response"));
         }) as typeof fetch;
 
         const logCtx: RequestLogContext = { model: "", provider: "" };
@@ -1409,7 +1423,7 @@ describe("compact alternate-account attempt (#913)", () => {
       const bearers: string[] = [];
       globalThis.fetch = (async (_url: string, init?: RequestInit) => {
         bearers.push(new Headers(init?.headers).get("authorization") ?? "");
-        return jsonResponse(completedPayload("compact response at full quota"));
+        return jsonResponse(completedCompactPayload("compact response at full quota"));
       }) as typeof fetch;
 
       const res = await handleResponsesCompact(
@@ -1637,7 +1651,7 @@ describe("compact alternate-account attempt (#913)", () => {
       globalThis.fetch = (async () => {
         sends += 1;
         if (sends === 1) return Response.json({ error: { message: "flake" } }, { status: 503 });
-        return jsonResponse(completedPayload("recovered on retry"));
+        return jsonResponse(completedCompactPayload("recovered on retry"));
       }) as typeof fetch;
 
       const res = await handleResponsesCompact(

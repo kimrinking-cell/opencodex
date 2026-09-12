@@ -88,7 +88,7 @@ test("failed settings persistence restores the live context flag", async () => {
 });
 
 describe("native GPT catalog opt-in", () => {
-  test("Sol/Astra opt in with self-reporting; Luna/Terra remain legacy; routed names stay unchanged", () => {
+  test("deployed native policy keeps standard compaction; routed names stay unchanged", () => {
     const experimental = [...GPT_CONTEXT_MODELS];
     const legacy = [...LEGACY_CONTEXT_MODELS];
     const rows = [...experimental, ...legacy].flatMap(slug => [
@@ -107,15 +107,11 @@ describe("native GPT catalog opt-in", () => {
     applyGptContextManagement(models, config);
     rows.forEach((row, i) => {
       const messages = models[i]!.model_messages as Record<string, any>;
-      expect(messages.token_budget.enabled).toBe(row.experimental);
-      expect(messages.token_budget.use_history_notes_extension).toBe(row.experimental);
-      expect(models[i]!.supports_experimental_context).toBe(row.experimental);
-      expect(messages.token_budget.guidance_message.includes("context-failure-report.ts")).toBe(row.experimental);
-      expect(messages.token_budget.guidance_message.includes("context-continuity-receipt.ts")).toBe(row.experimental);
-      if (row.experimental) {
-        expect(messages.token_budget.guidance_message).toContain("continuity/current.md");
-        expect(messages.token_budget.guidance_message).toContain("**컨텍스트 복구 문제 감지 — 미해결**");
-      }
+      expect(messages.token_budget.enabled).toBe(false);
+      expect(messages.token_budget.use_history_notes_extension).toBe(false);
+      expect(models[i]!.supports_experimental_context).toBe(false);
+      expect(messages.token_budget.guidance_message).not.toContain("context-failure-report.ts");
+      expect(messages.token_budget.guidance_message).not.toContain("context-continuity-receipt.ts");
       expect(messages.instructions_template).toBe((original[i]!.model_messages as Record<string, unknown>).instructions_template);
     });
     expect(models.slice(rows.length)).toEqual(original.slice(rows.length));
@@ -123,6 +119,22 @@ describe("native GPT catalog opt-in", () => {
     applyGptContextManagement(models, config);
     expect(models).toEqual(once);
     applyGptContextManagement(models, { ...config, gptContextManagement: false });
+    expect(models).toEqual(once);
+    restoreGptContextManagement(models);
+    expect(models).toEqual(original);
+  });
+  test("explicit opt-out survives repeated sync even when upstream defaults enable experimental context", () => {
+    const models: RawEntry[] = [{ slug: "gpt-6-astra", supports_experimental_context: true,
+      model_messages: { instructions_template: "preserve", token_budget: { enabled: true, use_history_notes_extension: true } },
+    }];
+    const original = structuredClone(models);
+    for (let i = 0; i < 3; i++) {
+      applyGptContextManagement(models, { ...config, gptContextManagement: false });
+      expect(models[0]!.supports_experimental_context).toBe(false);
+      expect((models[0]!.model_messages as any).token_budget).toMatchObject({ enabled: false, use_history_notes_extension: false });
+      expect((models[0]!.model_messages as any).instructions_template).toBe("preserve");
+    }
+    restoreGptContextManagement(models);
     expect(models).toEqual(original);
   });
   test("API-key OpenAI and malformed settings never enable the feature", () => {
@@ -315,6 +327,18 @@ test("writes are not replayed on redirects or backend failures and HTML is not s
     expect(response.status).toBe(upstream.status === 503 ? 503 : 502);
     expect(calls).toBe(1);
   }
+});
+
+test("disabled experimental sessions fail clearly before binding or account selection", async () => {
+  const h = headers();
+  h.set("x-codex-turn-metadata", JSON.stringify({ session_id: "disabled-fixture", history_ingest_requested: true }));
+  const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", {
+    method: "POST", headers: h,
+    body: JSON.stringify({ model: "gpt-5.6-sol", input: "fixture", stream: false }),
+  }), { ...config, gptContextManagement: false }, { model: "gpt-5.6-sol", provider: "openai" });
+  expect(response.status).toBe(409);
+  expect((await response.json()).error.code).toBe("experimental_context_disabled");
+  expect(readContextAccountBinding("disabled-fixture")).toBeUndefined();
 });
 
 test("active context cannot switch into a routed provider", async () => {
