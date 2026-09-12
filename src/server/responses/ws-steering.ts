@@ -817,6 +817,19 @@ class NativeResponsesWsSessionImpl implements NativeResponsesWsSession {
       return this.sendRawUpstream(text, "steering_send_failed");
     }
     if (type === "response.create") {
+      // A completed request can be followed by a new, self-contained request on
+      // the same client socket (notably after standard compaction). Do not reuse
+      // the previous prepared instructions/account for that independent request.
+      // Return it to handleResponses so routing, authorization and normalization
+      // run again. Linked continuations and pending steering remain on this
+      // session and retain their existing strict checks and no-replay contract.
+      if (!this.activeResponse && !this.awaitingSuccessor && !this.steeringInFlight
+        && !this.steeringAccepted && !hasOwn(frame, "previous_response_id")
+        && typeof frame.model === "string" && frame.model.trim().length > 0
+        && typeof frame.instructions === "string" && hasOwn(frame, "input")) {
+        this.close(1000, "independent request requires canonical preparation");
+        return false;
+      }
       const model = frame.model;
       const ingressModel = this.options.initialIngressFrame.model;
       const expectedModel = typeof ingressModel === "string" && ingressModel.trim()

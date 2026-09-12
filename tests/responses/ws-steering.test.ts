@@ -146,6 +146,43 @@ async function startedSession(options: {
 }
 
 describe("native Astra Responses WebSocket steering", () => {
+  test("a full independent request after a completed turn returns to canonical routing", async () => {
+    const client = new FixtureClient();
+    const upstream = new FixtureUpstream();
+    let released = 0;
+    const { result } = await startedSession({ client, upstream,
+      body: { model: NATIVE_ASTRA_MODEL, input: "before", instructions: "compact instructions" },
+      onTurnRelease: () => { released++; },
+    });
+    upstream.emitMessage(responseEvent("R1"));
+    upstream.emitMessage(responseEvent("R1", "completed"));
+    expect(result.session.handleClientFrame({ type: "response.create", model: NATIVE_ASTRA_MODEL,
+      input: [{ type: "message", role: "user", content: "compacted history and next turn" }],
+      instructions: "ordinary instructions",
+    })).toBe(false);
+    expect(result.session.isClosed()).toBe(true);
+    expect(upstream.readyState).toBe(3);
+    expect(upstream.sent).toHaveLength(1);
+    expect(client.readyState).toBe(1);
+    expect(released).toBe(1);
+  });
+
+  test("fresh-request routing never replaces an active response or a linked continuation", async () => {
+    const upstream = new FixtureUpstream();
+    const { result } = await startedSession({ upstream,
+      body: { model: NATIVE_ASTRA_MODEL, input: "before", instructions: "original" },
+    });
+    const fresh = { type: "response.create", model: NATIVE_ASTRA_MODEL, input: "next", instructions: "changed" };
+    expect(result.session.handleClientFrame(fresh)).toBe(true);
+    expect(result.session.isClosed()).toBe(false);
+    upstream.emitMessage(responseEvent("R1"));
+    upstream.emitMessage(responseEvent("R1", "completed"));
+    expect(result.session.handleClientFrame({ ...fresh, previous_response_id: "R1" })).toBe(true);
+    expect(result.session.isClosed()).toBe(false);
+    expect(upstream.sent).toHaveLength(1);
+    result.session.close();
+  });
+
   test("preserves a non-generating warmup and permits the later generating request", async () => {
     const upstream = new FixtureUpstream();
     const { result } = await startedSession({
