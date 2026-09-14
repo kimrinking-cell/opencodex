@@ -30,33 +30,33 @@ export function DashboardOverviewHead({
     <>
       <div className="dash-overview-head">
         <div className="stat-row">
-          <div className="stat">
-            <div className="label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              {t("dash.multiAgent")}
+          <div className="stat stat--control">
+            <div className="label" style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "space-between" }}>
+              <span>{t("dash.multiAgent")}</span>
               <button
                 ref={maHelpTriggerRef}
                 type="button"
                 className="btn btn-ghost btn-sm"
-                style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
+                style={{ width: 22, height: 22, minWidth: 22, flex: "0 0 22px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--faint)", background: "var(--raised)" }}
                 onClick={() => setMaHelpOpen(true)}
                 aria-label={t("dash.multiAgent")}
                 aria-haspopup="dialog"
                 aria-controls="multi-agent-help-dialog"
                 aria-expanded={maHelpOpen}
               >
-                <IconInfo width={14} height={14} aria-hidden="true" />
+                <IconInfo width={12} height={12} aria-hidden="true" />
               </button>
             </div>
-            <div className="value" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <div role="radiogroup" aria-label={t("dash.multiAgent")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
+            <div className="value" style={{ display: "flex", alignItems: "center", justifyContent: "stretch", marginTop: 4 }}>
+              <div role="radiogroup" aria-label={t("dash.multiAgent")} style={{ display: "inline-flex", borderRadius: "999px", background: "var(--raised)", padding: 3, gap: 2, width: "100%", justifyContent: "space-between", border: "1px solid var(--border-soft)" }}>
                 {(["v1", "default", "v2"] as const).map(mode => (
                   <button
                     key={mode}
                     type="button"
                     role="radio"
                     aria-checked={maMode === mode}
-                    className={`btn btn-sm text-caption${maMode === mode ? " btn-primary" : " btn-ghost"}`}
-                    style={{ borderRadius: "var(--radius-pill)", minWidth: 36, padding: "5px 10px", border: "none", background: maMode === mode ? undefined : "transparent", color: maMode === mode ? undefined : "var(--muted)" }}
+                    className={`btn btn-sm text-caption${maMode === mode ? " btn-primary" : ""}`}
+                    style={{ borderRadius: "999px", flex: "1 1 0", minWidth: 0, padding: "5px 6px", border: "none", fontSize: 11, fontWeight: 600, background: maMode === mode ? "var(--accent)" : "transparent", color: maMode === mode ? "var(--accent-ink)" : "var(--muted)" }}
                     disabled={maBusy}
                     onClick={() => void switchMaMode(mode)}
                   >{t(`models.v2Mode_${mode}` as TKey)}</button>
