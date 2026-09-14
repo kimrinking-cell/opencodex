@@ -88,12 +88,12 @@ test("failed settings persistence restores the live context flag", async () => {
 });
 
 describe("native GPT catalog opt-in", () => {
-  test("Sol/Astra opt in with self-reporting; Luna/Terra remain legacy; routed names stay unchanged", () => {
+  test("Sol/Astra keep /responses/compact; experimental context is never forced; routed names stay unchanged", () => {
     const experimental = [...GPT_CONTEXT_MODELS];
     const legacy = [...LEGACY_CONTEXT_MODELS];
     const rows = [...experimental, ...legacy].flatMap(slug => [
-      { slug, experimental: experimental.includes(slug) },
-      { slug: `account-a/${slug}`, experimental: experimental.includes(slug), account: true },
+      { slug },
+      { slug: `account-a/${slug}`, account: true },
     ]);
     const models: RawEntry[] = rows.map(row => ({ slug: row.slug,
       ...(row.account ? { opencodex_catalog_kind: "account-selector-v1" } : {}),
@@ -107,15 +107,11 @@ describe("native GPT catalog opt-in", () => {
     applyGptContextManagement(models, config);
     rows.forEach((row, i) => {
       const messages = models[i]!.model_messages as Record<string, any>;
-      expect(messages.token_budget.enabled).toBe(row.experimental);
-      expect(messages.token_budget.use_history_notes_extension).toBe(row.experimental);
-      expect(models[i]!.supports_experimental_context).toBe(row.experimental);
-      expect(messages.token_budget.guidance_message.includes("context-failure-report.ts")).toBe(row.experimental);
-      expect(messages.token_budget.guidance_message.includes("context-continuity-receipt.ts")).toBe(row.experimental);
-      if (row.experimental) {
-        expect(messages.token_budget.guidance_message).toContain("continuity/current.md");
-        expect(messages.token_budget.guidance_message).toContain("**컨텍스트 복구 문제 감지 — 미해결**");
-      }
+      expect(messages.token_budget.enabled).toBe(false);
+      expect(messages.token_budget.use_history_notes_extension).toBe(false);
+      expect(Object.hasOwn(models[i]!, "supports_experimental_context")).toBe(false);
+      expect(messages.token_budget.guidance_message ?? "").not.toContain("context-failure-report.ts");
+      expect(messages.token_budget.guidance_message ?? "").not.toContain("context-continuity-receipt.ts");
       expect(messages.instructions_template).toBe((original[i]!.model_messages as Record<string, unknown>).instructions_template);
     });
     expect(models.slice(rows.length)).toEqual(original.slice(rows.length));
@@ -124,6 +120,17 @@ describe("native GPT catalog opt-in", () => {
     expect(models).toEqual(once);
     applyGptContextManagement(models, { ...config, gptContextManagement: false });
     expect(models).toEqual(original);
+  });
+  test("clears a previously forced experimental-context catalog flag", () => {
+    const models: RawEntry[] = [{
+      slug: "gpt-5.6-sol",
+      supports_experimental_context: true,
+      model_messages: { token_budget: { enabled: true, use_history_notes_extension: true } },
+    }];
+    applyGptContextManagement(models, config);
+    expect(Object.hasOwn(models[0]!, "supports_experimental_context")).toBe(false);
+    expect((models[0]!.model_messages as Record<string, any>).token_budget.enabled).toBe(false);
+    expect((models[0]!.model_messages as Record<string, any>).token_budget.use_history_notes_extension).toBe(false);
   });
   test("API-key OpenAI and malformed settings never enable the feature", () => {
     const models: RawEntry[] = [{ slug: "gpt-6-astra", model_messages: {} }];

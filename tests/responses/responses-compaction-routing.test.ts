@@ -137,6 +137,15 @@ function completedPayload(text: string): Record<string, unknown> {
   };
 }
 
+function nativeCompactPayload(text = "native-compact"): Record<string, unknown> {
+  return {
+    id: "resp_compact_native",
+    status: "completed",
+    output: [{ type: "compaction", encrypted_content: text }],
+    usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+  };
+}
+
 function sseResponse(events: Array<Record<string, unknown>>): Response {
   const body = events.map(e => `event: ${String(e.type)}\ndata: ${JSON.stringify(e)}\n\n`).join("");
   return new Response(body, {
@@ -354,7 +363,7 @@ describe("native compact usage reporting", () => {
         },
       },
     } as unknown as OcxConfig;
-    globalThis.fetch = (async () => jsonResponse(completedPayload("native summary"))) as typeof fetch;
+    globalThis.fetch = (async () => jsonResponse(nativeCompactPayload("native summary"))) as typeof fetch;
     const logCtx: RequestLogContext = { model: "", provider: "" };
     const response = await handleResponsesCompact(
       compactionRequest(baseCompactionBody({ model: "openai-apikey/gpt-5.5" })),
@@ -381,7 +390,7 @@ describe("native compact usage reporting", () => {
         tokens: { access_token: "main-access-token", account_id: "main-account" },
       }));
       updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 0);
-      globalThis.fetch = (async () => jsonResponse(completedPayload("main compact"))) as typeof fetch;
+      globalThis.fetch = (async () => jsonResponse(nativeCompactPayload("main compact"))) as typeof fetch;
       const mainLog: RequestLogContext = { model: "", provider: "" };
       expect((await handleResponsesCompact(compactionRequest(baseCompactionBody({})), mainConfig, mainLog)).status).toBe(200);
       expect(mainLog.accountLogLabel).toBe("main");
@@ -443,7 +452,7 @@ describe("native Codex pool compaction", () => {
             headers: { "x-codex-primary-reset-at": String(resetAt) },
           });
         }
-        return jsonResponse(completedPayload("Terra compact response"));
+        return jsonResponse(nativeCompactPayload("Terra compact response"));
       }) as typeof fetch;
       const spark = await handleResponsesCompact(
         compactionRequest(baseCompactionBody({ model: "gpt-5.3-codex-spark" })),
@@ -1118,6 +1127,36 @@ describe("compact alternate-account attempt (#913)", () => {
     });
   }
 
+  for (const [label, payload] of [
+    ["empty output", { output: [] }],
+    ["empty compaction ciphertext", { output: [{ type: "compaction", encrypted_content: "" }] }],
+  ] as const) {
+    test(`native compact 200 with ${label} falls back to synthetic compaction`, async () => {
+      await withPoolEnv("ocx-compact-empty-2xx-", async config => {
+        const item = { type: "compaction", encrypted_content: "synthetic-after-empty-native" };
+        const urls: string[] = [];
+        globalThis.fetch = (async (input: string | URL | Request) => {
+          const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+          urls.push(url);
+          return url.endsWith("/responses/compact")
+            ? Response.json(payload, { status: 200 })
+            : sseResponse([{ type: "response.completed", response: {
+              id: "resp_compact_empty_2xx", status: "completed", output: [item],
+            } }]);
+        }) as typeof fetch;
+        const response = await handleResponsesCompact(compactionRequest({
+          model: "gpt-5.5", input: [{ role: "user", content: "keep-the-goal" }],
+        }), config, { model: "", provider: "" });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ output: [item] });
+        expect(urls).toEqual([
+          "https://chatgpt.com/backend-api/codex/responses/compact",
+          "https://chatgpt.com/backend-api/codex/responses",
+        ]);
+      });
+    });
+  }
+
   for (const status of ["failed", "incomplete"] as const) {
     test(`native 404 followed by ${status} SSE does not install replacement history`, async () => {
       await withPoolEnv("ocx-compact-404-terminal-", async config => {
@@ -1236,7 +1275,7 @@ describe("compact alternate-account attempt (#913)", () => {
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
         observedUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         observedHeaders = new Headers(init?.headers);
-        return jsonResponse(completedPayload("canonical compact response"));
+        return jsonResponse(nativeCompactPayload("canonical compact response"));
       }) as typeof fetch;
 
       const res = await handleResponsesCompact(
@@ -1265,7 +1304,7 @@ describe("compact alternate-account attempt (#913)", () => {
               headers: { "retry-after": "42" },
             });
           }
-          return jsonResponse(completedPayload("alternate compact response"));
+          return jsonResponse(nativeCompactPayload("alternate compact response"));
         }) as typeof fetch;
 
         const logCtx: RequestLogContext = { model: "", provider: "" };
@@ -1408,7 +1447,7 @@ describe("compact alternate-account attempt (#913)", () => {
       const bearers: string[] = [];
       globalThis.fetch = (async (_url: string, init?: RequestInit) => {
         bearers.push(new Headers(init?.headers).get("authorization") ?? "");
-        return jsonResponse(completedPayload("compact response at full quota"));
+        return jsonResponse(nativeCompactPayload("compact response at full quota"));
       }) as typeof fetch;
 
       const res = await handleResponsesCompact(
@@ -1636,7 +1675,7 @@ describe("compact alternate-account attempt (#913)", () => {
       globalThis.fetch = (async () => {
         sends += 1;
         if (sends === 1) return Response.json({ error: { message: "flake" } }, { status: 503 });
-        return jsonResponse(completedPayload("recovered on retry"));
+        return jsonResponse(nativeCompactPayload("recovered on retry"));
       }) as typeof fetch;
 
       const res = await handleResponsesCompact(

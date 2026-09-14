@@ -1245,14 +1245,13 @@ test("management convergence preserves the Sol/Astra context policy across refre
   const budgets = (rows: RawEntry[]) => rows.map(row => ({ slug: row.slug, budget: (row.model_messages as any)?.token_budget }));
   expect(budgets(twice)).toEqual(budgets(once));
   for (const slug of slugs) {
-    const experimental = slug === "gpt-5.6-sol" || slug === "gpt-6-astra";
     for (const prefix of ["", "desktop/", "team/"]) {
       const row = twice.find(entry => entry.slug === `${prefix}${slug}`);
       const budget = (row?.model_messages as any)?.token_budget;
-      expect(budget?.enabled).toBe(experimental);
-      expect(budget?.use_history_notes_extension).toBe(experimental);
-      expect(budget?.guidance_message.includes("context-failure-report.ts")).toBe(experimental);
-      expect(row?.supports_experimental_context).toBe(experimental);
+      expect(budget?.enabled).toBe(false);
+      expect(budget?.use_history_notes_extension).toBe(false);
+      expect(budget?.guidance_message ?? "").not.toContain("context-failure-report.ts");
+      expect(row?.supports_experimental_context).toBeUndefined();
     }
   }
   const disabled = (await convergeCatalog({ ...nextConfig, gptContextManagement: false })).models ?? [];

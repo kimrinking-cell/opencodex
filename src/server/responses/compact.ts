@@ -469,6 +469,23 @@ function compactResponseHeaders(upstream: Response): Headers {
   return headers;
 }
 
+/** Native `/responses/compact` is usable only when it returns a real compaction item. */
+export function nativeCompactOutputIsUsable(text: string): boolean {
+  try {
+    const json = JSON.parse(text) as { output?: unknown };
+    if (!Array.isArray(json.output)) return false;
+    return json.output.some((item) => {
+      if (!item || typeof item !== "object") return false;
+      const rec = item as { type?: unknown; encrypted_content?: unknown };
+      return rec.type === "compaction"
+        && typeof rec.encrypted_content === "string"
+        && rec.encrypted_content.trim().length > 0;
+    });
+  } catch {
+    return false;
+  }
+}
+
 export async function bufferCompactResponse(
   upstream: Response,
   signal: AbortSignal,
@@ -1084,8 +1101,12 @@ export async function handleResponsesCompact(
     // request log; the routed branch gets the same through handleResponses. The
     // synthetic buffer errors are not upstream bodies and stay uninspected.
     if (buffered.ok) {
-      inspectResponseLogJson(logCtx, await buffered.clone().text());
-      forgetCompactHandoffRoute(req);
+      const nativeBody = await buffered.clone().text();
+      inspectResponseLogJson(logCtx, nativeBody);
+      if (nativeCompactOutputIsUsable(nativeBody)) {
+        forgetCompactHandoffRoute(req);
+        return buffered;
+      }
     } else if (quotaFailure && !storedPool401ReplayAttempted) {
       const fallbackModel = compactHandoffRoute(req, raw.model);
       if (fallbackModel && !req.signal.aborted) {
@@ -1112,8 +1133,9 @@ export async function handleResponsesCompact(
         }
       }
     }
-    // A native compact 404 falls back to a regular Responses compaction turn.
-    if (buffered.status !== 404) return buffered;
+    // 404 and empty/invalid 2xx fall through to synthetic compaction. ChatGPT can
+    // answer 200 + output: [] which Codex would otherwise install as empty history.
+    if (buffered.status !== 404 && !buffered.ok) return buffered;
     } finally {
       releaseUpstreamHostAdmission(compactHostAdmissionLease);
       releaseCodexAuthContextProbeLease(authCtx);

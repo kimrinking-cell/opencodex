@@ -357,6 +357,11 @@ start and on `ocx sync`, opencodex:
 4. **Filters** `config.disabledModels` and each provider's non-empty `selectedModels` allowlist.
 5. **Re-ranks** so featured models sort first (see below), then writes the merged catalog back.
 
+The `gptContextManagement` setting does not set `supports_experimental_context` or enable
+token-budget experimental wipe. Codex keeps using `/responses/compact`. If that native endpoint
+returns 2xx without a usable compaction item, the proxy synthesizes a compact summary instead of
+installing empty history.
+
 Routed catalog entries also get their GPT-5 identity rewritten to the real upstream model name.
 Reasoning controls come from provider/model metadata across Codex's `low | medium | high | xhigh |
 max | ultra` ladder; unsupported values are mapped or clamped before the upstream request.

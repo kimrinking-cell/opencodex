@@ -15,7 +15,7 @@ import {
 } from "../../src/responses/compaction";
 import type { AdapterEvent } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
-import { bufferCompactResponse, COMPACT_RESPONSE_MAX_BYTES } from "../../src/server/responses/compact";
+import { bufferCompactResponse, COMPACT_RESPONSE_MAX_BYTES, nativeCompactOutputIsUsable } from "../../src/server/responses/compact";
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
   withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
@@ -62,6 +62,27 @@ function compactBodySource(onCancel?: () => void) {
     close() { if (!ended) { ended = true; controller.close(); } },
   };
 }
+
+describe("native compact output usability", () => {
+  test("requires a non-empty compaction item", () => {
+    expect(nativeCompactOutputIsUsable("")).toBe(false);
+    expect(nativeCompactOutputIsUsable("{")).toBe(false);
+    expect(nativeCompactOutputIsUsable("{}")).toBe(false);
+    expect(nativeCompactOutputIsUsable(JSON.stringify({ output: [] }))).toBe(false);
+    expect(nativeCompactOutputIsUsable(JSON.stringify({
+      output: [{ type: "compaction", encrypted_content: "" }],
+    }))).toBe(false);
+    expect(nativeCompactOutputIsUsable(JSON.stringify({
+      output: [{ type: "compaction", encrypted_content: "   " }],
+    }))).toBe(false);
+    expect(nativeCompactOutputIsUsable(JSON.stringify({
+      output: [{ type: "message", role: "user", content: "policy" }],
+    }))).toBe(false);
+    expect(nativeCompactOutputIsUsable(JSON.stringify({
+      output: [{ type: "compaction", encrypted_content: "native-control" }],
+    }))).toBe(true);
+  });
+});
 
 describe("native compact response body deadline", () => {
   test("headers followed by silence expire at the default 300 seconds without waiting for cancel", () => withCompactBodyClock(async () => {

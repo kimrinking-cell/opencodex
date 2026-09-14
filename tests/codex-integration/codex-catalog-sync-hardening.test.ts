@@ -141,8 +141,8 @@ describe("Codex catalog sync hardening", () => {
     const budgets = (rows: any[]) => rows.map(row => ({ slug: row.slug, budget: row.model_messages?.token_budget }));
     expect(budgets(again)).toEqual(budgets(enabled));
     for (const slug of ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"]) {
-      expect(enabled.find((row: any) => row.slug === slug)?.model_messages.token_budget.enabled).toBe(slug === "gpt-5.6-sol" || slug === "gpt-6-astra");
-      expect(enabled.find((row: any) => row.slug === slug)?.supports_experimental_context).toBe(slug === "gpt-5.6-sol" || slug === "gpt-6-astra");
+      expect(enabled.find((row: any) => row.slug === slug)?.model_messages.token_budget.enabled).toBe(false);
+      expect(enabled.find((row: any) => row.slug === slug)?.supports_experimental_context).toBeUndefined();
       expect(disabled.find((row: any) => row.slug === slug)?.model_messages.token_budget?.enabled).not.toBe(true);
       expect(disabled.find((row: any) => row.slug === slug)?.supports_experimental_context).toBeUndefined();
     }

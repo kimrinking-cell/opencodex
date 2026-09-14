@@ -142,6 +142,8 @@ Codex는 디스크의 카탈로그(`$CODEX_HOME/opencodex-catalog.json`이 기�
 4. `config.disabledModels`와 각 provider의 비어 있지 않은 `selectedModels` allowlist를 **필터링**합니다.
 5. featured 모델이 먼저 정렬되도록 **다시 순서화**한 뒤(아래 참고), 병합된 catalog를 다시 씁니다.
 
+`gptContextManagement` 설정은 `supports_experimental_context`를 켜거나 토큰 예산 실험 경로로 창을 비우지 않습니다. 압축은 `/responses/compact`를 유지하고, 네이티브 2xx에 쓸 수 있는 압축 항목이 없으면 프록시가 합성 요약을 만듭니다.
+
 라우팅된 카탈로그 항목의 GPT-5 정체성 문구도 실제 업스트림 모델 이름에 맞게 바꿉니다. reasoning 선택지는
 프로바이더와 모델 메타데이터에 따라 Codex의 `low | medium | high | xhigh | max | ultra` 단계를 사용하며,
 업스트림이 지원하지 않는 값은 요청을 보내기 전에 매핑하거나 지원 범위로 낮춥니다.

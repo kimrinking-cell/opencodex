@@ -70,15 +70,15 @@ export function applyGptContextManagement(models: RawEntry[], config: OcxConfig)
     const own = row.model_messages && typeof row.model_messages === "object"
       ? row.model_messages as Record<string, unknown> : {};
     row[CATALOG_MARKER] = own.token_budget ?? null;
-    const experimental = GPT_CONTEXT_MODELS.has(slug);
     row[CONTEXT_SUPPORT_MARKER] = Object.hasOwn(row, "supports_experimental_context")
       ? row.supports_experimental_context : null;
-    row.supports_experimental_context = experimental;
+    // Experimental context skips /responses/compact, wipes the window, and restores
+    // from Notes/History. This opt-in must not advertise that path.
+    delete row.supports_experimental_context;
     row.model_messages = { ...own, token_budget: {
       ...defaults,
-      enabled: experimental,
-      use_history_notes_extension: experimental,
-      ...(experimental ? { guidance_message: `${defaults!.guidance_message}\n\n${contextSelfReportGuidance(slug)}` } : {}),
+      enabled: false,
+      use_history_notes_extension: false,
     } };
   }
 }

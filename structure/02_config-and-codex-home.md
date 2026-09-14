@@ -75,7 +75,10 @@ to SQLite ownership; the tolerant root-string helper used by injection and catal
 
 ## Experimental context continuity receipts
 
-When GPT context management is enabled for native Sol or Astra, OpenCodex injects a passive
+GPT context management does not force `supports_experimental_context` or token-budget
+experimental wipe. Compaction stays on `/responses/compact`, with synthetic fallback when a
+native 2xx has no usable compaction item. Notes/History relays remain available for leftover
+experimental sessions. When those sessions are active, OpenCodex injects a passive
 continuity protocol alongside the existing failure self-report guidance. A model may issue a
 checkpoint only at a verified milestone of substantive unfinished work. The opaque token must be
 written with the compact task state to native Notes at `continuity/current.md` and read back before
