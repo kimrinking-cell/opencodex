@@ -1481,6 +1481,32 @@ export interface ConsumedComboFailure {
   usage?: OcxUsage;
 }
 
+/**
+ * The one sanctioned seam for a prepared native transport. All routing, context/account binding,
+ * adapter/tool normalization, and body accounting have completed before this callback runs.
+ * Returning undefined keeps the existing HTTP/SSE fetch path unchanged.
+ */
+export interface PreparedResponsesTransportContext {
+  request: AdapterRequest;
+  parsed: OcxParsedRequest;
+  route: RouteResult;
+  authCtx: CodexAuthContext;
+  selectedForwardHeaders: Headers;
+  upstream: AbortController;
+  connectTimeoutMs: number;
+  abortSignal?: AbortSignal;
+  turnAdmissionLease?: AdmissionLease;
+  inboundTransport?: InboundWire | "websocket";
+}
+
+export interface PreparedResponsesTransportResult {
+  response: Response;
+  /** A native socket handshake proves the prepared upstream host was reached. */
+  hostObserved?: boolean;
+  /** Keep this response stream alive across completed/incomplete terminal events. */
+  keepAliveAfterTerminal?: boolean;
+}
+
 
 
 export interface HandleResponsesOptions {
@@ -1511,6 +1537,10 @@ export interface HandleResponsesOptions {
   responsesTerminalRepairScheduler?: ResponsesTerminalRepairScheduler;
   /** Internal deterministic runtime-identity seam for Codex upstream WS selection tests. */
   codexWsRuntimeIdentity?: BunRuntimeGateInput;
+  /** Prepared-request transport override; must not repeat route/auth/adapter preparation. */
+  preparedRequestTransport?: (
+    context: PreparedResponsesTransportContext,
+  ) => Promise<PreparedResponsesTransportResult | undefined>;
   /** Test seam for native main refresh without live OAuth traffic. */
   nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
   /**
@@ -4156,32 +4186,51 @@ async function handleResponsesInner(
     };
     const initialBodyRefusal = refuseOversizedOutboundBody(request);
     if (initialBodyRefusal) return initialBodyRefusal;
+    let preparedTransportKeepAliveAfterTerminal = false;
     try {
-      // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
-      // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
-      // Body is a replayable string; nothing has streamed to the client yet.
-      upstreamResponse = await fetchWithTransientRetry(
-        recovery => {
-          noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery);
-          return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
-            method: request.method,
-            headers: request.headers,
-            body: request.body,
-          }, recovery), upstream.signal, connectMs, parsed.stream,
-            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              providerName: route.providerName,
-              modelId: route.modelId,
-            }),
-            route.provider.authMode === "forward")
-            // Every real attempt response — including an intermediate 5xx the
-            // retry wrapper replaces — proves the host was reached (#914 review).
-            .then(res => {
-              settleObservedHostResponse();
-              return res;
-            });
-        },
-        { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
-      );
+      const preparedTransport = await options.preparedRequestTransport?.({
+        request,
+        parsed,
+        route,
+        authCtx,
+        selectedForwardHeaders: new Headers(selectedForwardHeaders),
+        upstream,
+        connectTimeoutMs: connectMs,
+        abortSignal: options.abortSignal,
+        turnAdmissionLease: options.turnAdmissionLease,
+        inboundTransport: options.inboundTransport,
+      });
+      if (preparedTransport) {
+        upstreamResponse = preparedTransport.response;
+        preparedTransportKeepAliveAfterTerminal = preparedTransport.keepAliveAfterTerminal === true;
+        if (preparedTransport.hostObserved === true) settleObservedHostResponse();
+      } else {
+        // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
+        // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
+        // Body is a replayable string; nothing has streamed to the client yet.
+        upstreamResponse = await fetchWithTransientRetry(
+          recovery => {
+            noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery);
+            return fetchWithHeaderTimeout(request.url, applyUpstreamRecoveryInit({
+              method: request.method,
+              headers: request.headers,
+              body: request.body,
+            }, recovery), upstream.signal, connectMs, parsed.stream,
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                providerName: route.providerName,
+                modelId: route.modelId,
+              }),
+              route.provider.authMode === "forward")
+              // Every real attempt response — including an intermediate 5xx the
+              // retry wrapper replaces — proves the host was reached (#914 review).
+              .then(res => {
+                settleObservedHostResponse();
+                return res;
+              });
+          },
+          { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+        );
+      }
     } catch (err) {
       return transportFailureResponse(err);
     } finally {
@@ -5007,7 +5056,12 @@ async function handleResponsesInner(
       const rewrittenBody = clientBlockRewrite !== undefined
         ? relaySseWithBlockRewrite(nativeBody, clientBlockRewrite, translatorBudget)
         : nativeBody;
-      const clientBody = relaySseWithFailedTail(rewrittenBody, upstream, reason => clientGone.abort(reason));
+      const clientBody = relaySseWithFailedTail(
+        rewrittenBody,
+        upstream,
+        reason => clientGone.abort(reason),
+        { keepAliveAfterTerminal: preparedTransportKeepAliveAfterTerminal },
+      );
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,
         headers,
