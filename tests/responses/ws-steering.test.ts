@@ -757,6 +757,7 @@ describe("composed native Astra endpoint", () => {
             thread_id: "fixture-thread",
             turn_id: "fixture-turn",
             trace_id: "trace-initial",
+            "x-codex-ws-stream-request-start-ms": "1000",
             ws_request_header_x_openai_internal_codex_responses_lite: "true",
           },
           access_programs: ["fixture-access-program"],
@@ -817,9 +818,18 @@ describe("composed native Astra endpoint", () => {
                     client_metadata: { ...(nativeConfig.client_metadata as Record<string, unknown>), session_id: "changed-session" },
                   })));
                 } else if (rejectedContinuations.length === 2) {
+                  client.send(JSON.stringify(continuationFrame({
+                    client_metadata: { ...(nativeConfig.client_metadata as Record<string, unknown>), turn_id: "changed-turn" },
+                  })));
+                } else if (rejectedContinuations.length === 3) {
                   sentContinuation = true;
                   client.send(JSON.stringify(continuationFrame({
-                    client_metadata: { ...(nativeConfig.client_metadata as Record<string, unknown>), trace_id: "trace-successor" },
+                    client_metadata: {
+                      ...(nativeConfig.client_metadata as Record<string, unknown>),
+                      trace_id: "trace-successor",
+                      "x-codex-turn-state": "state-successor",
+                      "x-codex-ws-stream-request-start-ms": "2000",
+                    },
                   })));
                 }
               }
@@ -847,6 +857,7 @@ describe("composed native Astra endpoint", () => {
           "response.completed",
           "response.steer.accepted",
           "response.steer.pending",
+          "error",
           "error",
           "error",
           "response.created",
@@ -885,8 +896,10 @@ describe("composed native Astra endpoint", () => {
           thread_id: "fixture-thread",
           turn_id: "fixture-turn",
           trace_id: "trace-successor",
+          "x-codex-turn-state": "state-successor",
+          "x-codex-ws-stream-request-start-ms": "2000",
         });
-        expect(rejectedContinuations).toHaveLength(2);
+        expect(rejectedContinuations).toHaveLength(3);
         expect(readContextAccountBinding("fixture-session")).toMatchObject({ kind: "caller", accountId: null, model: NATIVE_ASTRA_MODEL });
       } finally {
         await server.stop(true);

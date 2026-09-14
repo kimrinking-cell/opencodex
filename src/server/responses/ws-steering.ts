@@ -262,8 +262,9 @@ const CONTINUATION_FRAME_FIELDS = new Set<string>([
 ]);
 
 // These are the only body metadata values allowed to change after canonical preparation. The
-// session/thread/turn identity and every other metadata option remain pinned to the first request.
-const TRACE_METADATA_FIELDS = new Set([
+// official Codex client stamps every create separately and may add the opaque server-issued turn
+// state on a linked continuation. Session/thread/turn identity and every other option remain pinned.
+const MUTABLE_CONTINUATION_METADATA_FIELDS = new Set([
   "trace_id",
   "span_id",
   "request_id",
@@ -272,6 +273,8 @@ const TRACE_METADATA_FIELDS = new Set([
   "request_index",
   "traceparent",
   "tracestate",
+  "x-codex-turn-state",
+  "x-codex-ws-stream-request-start-ms",
 ]);
 
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
@@ -347,7 +350,7 @@ function continuationMetadata(
     if (incomingRecord) {
       const next: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(incomingRecord)) {
-        if (!TRACE_METADATA_FIELDS.has(key)) {
+        if (!MUTABLE_CONTINUATION_METADATA_FIELDS.has(key)) {
           return { present: false, value: undefined, error: "client_metadata adds an unapproved session option" };
         }
         next[key] = value;
@@ -366,7 +369,7 @@ function continuationMetadata(
   const base = objectRecord(canonical.client_metadata);
   const next = base ? { ...base } : {};
   for (const [key, value] of Object.entries(incomingRecord)) {
-    if (TRACE_METADATA_FIELDS.has(key)) {
+    if (MUTABLE_CONTINUATION_METADATA_FIELDS.has(key)) {
       next[key] = value;
       continue;
     }
