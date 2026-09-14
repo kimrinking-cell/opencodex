@@ -1,12 +1,14 @@
 import { formatErrorResponse } from "../bridge";
 import {
   assertContextAccountIdentity, contextSessionFromBody, gptContextManagementEnabled,
-  readContextAccountBinding,
+  readContextAccountBinding, readContextHistoryAccounts, contextAccountIdentity, applyContextAccountSession, type ContextAccountBinding,
 } from "../codex/context-management";
 import {
-  isCodexAuthContextUsable, materializeCodexUpstreamAuthAsync,
+  isCodexContextStorageAuthUsable, materializeCodexUpstreamAuthAsync,
   releaseCodexAuthContextProbeLease, resolveCodexAuthContext, type CodexAuthContext,
 } from "../codex/auth-context";
+import { getCodexAccountCredential } from "../codex/account-store";
+import { bundleContextHistoryOutputs } from "../codex/context-output-bundle";
 import { signalWithTimeout } from "../lib/abort";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import type { AdmissionLease } from "../lib/admission";
@@ -32,7 +34,7 @@ export interface ContextRelayDependencies {
   fetch?: typeof fetch;
 }
 
-/** Opaque native protocol: never log bodies, decrypt output, retry writes, or choose a new account. */
+/** Opaque native protocol: notes keep their owner; history reads cover all inference owners. */
 export async function handleContextManagement(
   req: Request, config: OcxConfig, turnAdmissionLease?: AdmissionLease,
   dependencies: ContextRelayDependencies = {},
@@ -61,20 +63,83 @@ export async function handleContextManagement(
     return formatErrorResponse(409, "context_account_unbound", "No GPT context request has established this session's account");
   }
   const linked = signalWithTimeout(35_000, req.signal);
+  try {
+    const owners = path.includes("/alpha/history/") ? readContextHistoryAccounts(sessionId) : [binding];
+    if (owners.length === 1) {
+      return await relayContextAccount(req, config, body, owners[0]!, linked.signal, turnAdmissionLease, dependencies);
+    }
+    // Bound fanout and total retained result bytes. Writes never enter this branch.
+    const results: (Response | undefined)[] = new Array(owners.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(2, owners.length) }, async () => {
+      while (next < owners.length) {
+        const index = next++;
+        results[index] = await relayContextAccount(req, config, body, owners[index]!, linked.signal, turnAdmissionLease, dependencies);
+      }
+    }));
+    const outputs: string[] = [];
+    const images: unknown[] = [];
+    let unavailable = 0;
+    let bytes = 0;
+    for (const result of results) {
+      // An account selected for an unsuccessful model attempt may never ingest history.
+      if (result?.status === 404) continue;
+      if (!result?.ok) { unavailable++; continue; }
+      const text = await result.text();
+      bytes += Buffer.byteLength(text);
+      if (bytes > 8 * 1024 * 1024) throw new Error("Context history result exceeded the size limit");
+      const value = JSON.parse(text) as { encrypted_output?: unknown; images?: unknown };
+      if (typeof value.encrypted_output !== "string" || !value.encrypted_output) { unavailable++; continue; }
+      outputs.push(value.encrypted_output);
+      if (Array.isArray(value.images)) images.push(...value.images);
+    }
+    if (!outputs.length) return formatErrorResponse(502, "context_history_unavailable", "No context history storage segment could be read");
+    return Response.json({
+      encrypted_output: bundleContextHistoryOutputs(sessionId, outputs, unavailable),
+      ...(images.length ? { images } : {}),
+    }, { headers: { "cache-control": "no-store" } });
+  } catch {
+    if (req.signal.aborted) return formatErrorResponse(499, "client_closed_request", "Context request was canceled");
+    if (linked.signal.aborted) return formatErrorResponse(504, "upstream_error", "Context backend timed out");
+    return formatErrorResponse(502, "context_history_unavailable", "Context history storage could not be read completely");
+  } finally { linked.cleanup(); }
+}
+
+async function relayContextAccount(
+  req: Request, config: OcxConfig, body: unknown, binding: ContextAccountBinding,
+  signal: AbortSignal, turnAdmissionLease: AdmissionLease | undefined, dependencies: ContextRelayDependencies,
+): Promise<Response> {
+  const path = new URL(req.url).pathname;
   let auth: CodexAuthContext | undefined;
   let response: Response | undefined;
   let accountReady = false;
   try {
-    auth = binding.kind === "caller" ? { kind: "main", accountId: null }
+    let callerMatches = false;
+    try { callerMatches = contextAccountIdentity(req.headers) === binding.identityHash; } catch {}
+    // A Desktop login may change while old context remains. Locate only a saved,
+    // configured credential with the original identity; never transfer the storage.
+    let accountId = binding.kind === "pool" ? binding.accountId : undefined;
+    if (binding.kind === "caller" && !callerMatches) {
+      accountId = (config.codexAccounts ?? []).find(account => {
+        if (account.isMain) return false;
+        const credential = getCodexAccountCredential(account.id);
+        if (!credential) return false;
+        try {
+          return contextAccountIdentity(new Headers({ authorization: `Bearer ${credential.accessToken}`, "chatgpt-account-id": credential.chatgptAccountId ?? "" })) === binding.identityHash;
+        } catch { return false; }
+      })?.id;
+      if (!accountId) throw new Error("The original context credential is not available");
+    }
+    auth = binding.kind === "caller" && callerMatches ? { kind: "main", accountId: null }
       : await (dependencies.resolveAuth ?? resolveCodexAuthContext)(req.headers, config, "pool", {
-        accountId: binding.accountId!, modelId: binding.model,
+        accountId: accountId!, contextStorageOnly: true,
         beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
-        signal: linked.signal,
+        signal,
       });
-    if (!isCodexAuthContextUsable(auth, config)) {
+    if (!isCodexContextStorageAuthUsable(auth, config)) {
       return formatErrorResponse(401, "authentication_error", "The original context account needs authentication");
     }
-    const headers = await (dependencies.materializeAuth ?? materializeCodexUpstreamAuthAsync)(req.headers, auth, { signal: linked.signal });
+    const headers = await (dependencies.materializeAuth ?? materializeCodexUpstreamAuthAsync)(req.headers, auth, { signal });
     assertContextAccountIdentity(binding, headers);
     accountReady = true;
     headers.set("content-type", "application/json");
@@ -83,25 +148,28 @@ export async function handleContextManagement(
       if (value !== null) headers.set(name, value);
     }
     const url = `${config.providers.openai!.baseUrl.replace(/\/+$/, "")}/${path.slice(4)}`;
+    const storageBody = binding.backendSessionId && body && typeof body === "object"
+      ? { ...body, context: { ...(body as { context?: object }).context, session_id: binding.backendSessionId } }
+      : body;
+    applyContextAccountSession(binding, req.headers, headers, storageBody);
     response = await (dependencies.fetch ?? fetch)(url, {
-      method: "POST", headers, body: JSON.stringify(body), signal: linked.signal, redirect: "manual",
+      method: "POST", headers, body: JSON.stringify(storageBody), signal, redirect: "manual",
     });
     if (response.status >= 300 && response.status < 400) {
       return formatErrorResponse(502, "upstream_error", "Context backend redirect was refused");
     }
-    const observed = await readBoundedResponseBytes(response, { maxBytes: 4 * 1024 * 1024, signal: linked.signal });
+    const observed = await readBoundedResponseBytes(response, { maxBytes: 4 * 1024 * 1024, signal });
     if (observed.oversized) return formatErrorResponse(502, "upstream_error", "Context backend response exceeded its size limit");
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.includes("application/json")) return formatErrorResponse(502, "upstream_error", "Context backend did not return JSON");
     return new Response(observed.bytes, { status: response.status, headers: { "content-type": contentType, "cache-control": "no-store" } });
   } catch {
     if (req.signal.aborted) return formatErrorResponse(499, "client_closed_request", "Context request was canceled");
-    if (linked.signal.aborted) return formatErrorResponse(504, "upstream_error", "Context backend timed out");
+    if (signal.aborted) return formatErrorResponse(504, "upstream_error", "Context backend timed out");
     if (accountReady) return formatErrorResponse(502, "upstream_error", "Context backend request failed");
     return formatErrorResponse(409, "context_account_unavailable", "Cannot use the original context account; restore it before continuing");
   } finally {
     if (auth) releaseCodexAuthContextProbeLease(auth);
-    linked.cleanup();
     if (response?.body && !response.body.locked) void response.body.cancel().catch(() => undefined);
   }
 }

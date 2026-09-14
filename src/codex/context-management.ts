@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { extractAccountId } from "../oauth/chatgpt";
@@ -98,11 +98,70 @@ export interface ContextAccountBinding {
   /** Stable account identity hash; never a bearer, raw account identifier, or note. */
   identityHash: string;
   model: string;
+  /** Alternate accounts cannot ingest into the first account's backend session. */
+  backendSessionId?: string;
+  backendWindowOffset?: number;
+}
+
+function accountScopedId(value: string, identityHash: string): string {
+  const bytes = Buffer.from(digest(`${identityHash}\0${value}`), "hex").subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x80;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** Namespace backend ingestion without changing the client's task, agent names, or item IDs. */
+export function applyContextAccountSession(
+  owner: ContextAccountBinding, sourceHeaders: Headers, targetHeaders: Headers, body: unknown,
+): void {
+  if (!owner.backendSessionId) return;
+  const source = JSON.parse(sourceHeaders.get("x-codex-turn-metadata") ?? "{}") as Record<string, unknown>;
+  const identityKeys = ["thread_id", "parent_thread_id", "forked_from_thread_id", "turn_id", "parent_turn_id", "root_turn_id"];
+  const update = (metadata: Record<string, unknown>) => {
+    metadata.session_id = owner.backendSessionId;
+    for (const key of identityKeys) {
+      const value = boundedId(source[key]);
+      if (value) metadata[key] = accountScopedId(value, owner.identityHash);
+    }
+    const window = boundedId(source.window_id);
+    const windowNumber = typeof source.window_number === "number" && Number.isSafeInteger(source.window_number)
+      ? source.window_number - (owner.backendWindowOffset ?? 0) : undefined;
+    if (windowNumber !== undefined) metadata.window_number = windowNumber;
+    if (window && typeof source.thread_id === "string" && window.startsWith(`${source.thread_id}:`)) {
+      metadata.window_id = `${accountScopedId(source.thread_id, owner.identityHash)}:${windowNumber ?? window.slice(source.thread_id.length + 1)}`;
+    }
+  };
+  const metadata = { ...source };
+  update(metadata);
+  targetHeaders.set("x-codex-turn-metadata", JSON.stringify(metadata));
+  for (const key of ["session_id", "session-id"]) if (targetHeaders.has(key)) targetHeaders.set(key, owner.backendSessionId);
+  for (const key of ["thread-id", "x-codex-parent-thread-id"]) {
+    const value = sourceHeaders.get(key);
+    if (value) targetHeaders.set(key, accountScopedId(value, owner.identityHash));
+  }
+  if (typeof metadata.window_id === "string") targetHeaders.set("x-codex-window-id", metadata.window_id);
+  const raw = body && typeof body === "object" ? body as Record<string, unknown> : undefined;
+  const client = raw?.client_metadata;
+  if (client && typeof client === "object" && !Array.isArray(client)) {
+    const fields = client as Record<string, unknown>;
+    update(fields);
+    if (typeof fields["x-codex-turn-metadata"] === "string") {
+      const full = JSON.parse(fields["x-codex-turn-metadata"]) as Record<string, unknown>;
+      update(full);
+      fields["x-codex-turn-metadata"] = JSON.stringify(full);
+    }
+    if (typeof metadata.window_id === "string") fields["x-codex-window-id"] = metadata.window_id;
+  }
+}
+
+export function contextSessionDigest(sessionId: string): string {
+  if (!boundedId(sessionId)) throw new Error("Invalid context-management session");
+  return digest(sessionId);
 }
 
 function bindingPath(sessionId: string): string {
-  if (!boundedId(sessionId)) throw new Error("Invalid context-management session");
-  return join(getConfigDir(), "context-management", `${digest(sessionId)}.json`);
+  return join(getConfigDir(), "context-management", `${contextSessionDigest(sessionId)}.json`);
 }
 
 export function readContextAccountBinding(sessionId: string): ContextAccountBinding | undefined {
@@ -137,7 +196,36 @@ export function assertContextAccountIdentity(binding: ContextAccountBinding, hea
   }
 }
 
-/** A first-writer claim survives proxy restarts. Concurrent different-account claims fail. */
+/** The first owner keeps notes; every inference owner retains its own history segment. */
+export function readContextHistoryAccounts(sessionId: string): ContextAccountBinding[] {
+  const initial = readContextAccountBinding(sessionId);
+  if (!initial) return [];
+  const owners = new Map([[initial.identityHash, initial]]);
+  const dir = join(getConfigDir(), "context-management", contextSessionDigest(sessionId));
+  let names: string[];
+  try { names = readdirSync(dir); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [initial];
+    throw error;
+  }
+  if (names.length > 32) throw new Error("Too many context history accounts");
+  for (const name of names.sort()) {
+    if (!/^[a-f0-9]{64}\.json$/.test(name)) throw new Error("Invalid context history account");
+    const path = join(dir, name);
+    if (statSync(path).size > 4096) throw new Error("Invalid context history account");
+    const owner = JSON.parse(readFileSync(path, "utf8")) as ContextAccountBinding;
+    if (owner.version !== 1 || owner.identityHash !== name.slice(0, -5)
+      || !GPT_CONTEXT_MODELS.has(owner.model)
+      || (owner.backendSessionId !== undefined && !boundedId(owner.backendSessionId))
+      || (owner.kind === "pool" ? !boundedId(owner.accountId) : owner.kind !== "caller" || owner.accountId !== null)) {
+      throw new Error("Invalid context history account");
+    }
+    if (!owners.has(owner.identityHash)) owners.set(owner.identityHash, owner);
+  }
+  return [...owners.values()];
+}
+
+/** Immutable first-writer records avoid losing concurrent account changes or storing tokens. */
 export function bindContextAccount(
   sessionId: string, model: string, auth: CodexAuthContext, headers: Headers,
   substituteMainCredential = false,
@@ -155,9 +243,24 @@ export function bindContextAccount(
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const existing = readContextAccountBinding(sessionId)!;
-    assertContextAccountIdentity(existing, headers);
-    if (existing.kind !== binding.kind || existing.accountId !== binding.accountId) {
-      throw new Error("Context-management account selection changed; retry using the session's original account");
+    if (existing.identityHash !== binding.identityHash) {
+      const owners = readContextHistoryAccounts(sessionId);
+      const recorded = owners.find(owner => owner.identityHash === binding.identityHash);
+      if (recorded) return recorded;
+      binding.backendSessionId = accountScopedId(sessionId, binding.identityHash);
+      const source = JSON.parse(headers.get("x-codex-turn-metadata") ?? "{}");
+      if (Number.isSafeInteger(source.window_number) && source.window_number >= 0) binding.backendWindowOffset = source.window_number;
+      if (!recorded) {
+        if (owners.length >= 16) throw new Error("Too many context history accounts");
+        const ownerDir = join(dir, contextSessionDigest(sessionId));
+        mkdirSync(ownerDir, { recursive: true, mode: 0o700 });
+        try {
+          writeFileSync(join(ownerDir, `${binding.identityHash}.json`), JSON.stringify(binding), { flag: "wx", mode: 0o600 });
+        } catch (cause) {
+          if ((cause as NodeJS.ErrnoException).code !== "EEXIST") throw cause;
+        }
+      }
+      return binding;
     }
     return existing;
   }

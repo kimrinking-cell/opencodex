@@ -74,10 +74,17 @@ unset for this model-specific opt-in. An explicit global token-budget override t
 over the catalog defaults. The existing `/v1` base URL remains valid: the proxy relays the native
 History and Notes v2 operations, including encrypted arguments and outputs.
 
-The first context-enabled model request binds the thread to its ChatGPT account. Notes, history,
-and subsequent model calls must use that account, including in Pool mode; quota exhaustion does
-not rotate an active context into another account. Restore the original account or start a new
-thread if it becomes unavailable. An active experimental context cannot switch to Luna, Terra, or a third-party model;
+The first context-enabled model request chooses the storage account for notes. Model requests
+continue to follow normal Pool selection, manual account switches, and eligible failover, even
+in an existing thread. History reads cover every account used by the thread; overlapping windows
+and items retain their original IDs. Notes stay in their original storage account and are written
+only once. Pausing inference or exhausting its quota does not disable context storage access.
+The proxy carries encrypted history results through the native client without decrypting them.
+This does not migrate or copy storage between accounts: the original credentials must remain
+available. Revoked or removed storage credentials produce an explicit unavailable or partial
+result, rather than silently dropping old context. If the Desktop login changes, the original
+account must still be registered in the Pool to access its old storage.
+An active experimental context cannot switch to Luna, Terra, or a third-party model;
 start a separate thread to use legacy compaction or another provider.
 
 Set the field to `false` through `/api/settings` and reload the app-server to restore the previous model metadata for new

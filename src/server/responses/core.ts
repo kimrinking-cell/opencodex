@@ -172,9 +172,10 @@ import {
 } from "../../codex/main-account";
 import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import {
-  bindContextAccount, contextSessionFromHeaders, gptContextManagementEnabled,
+  bindContextAccount, applyContextAccountSession, contextSessionFromHeaders, gptContextManagementEnabled,
   GPT_CONTEXT_MODELS, readContextAccountBinding, contextSelfReportGuidance,
 } from "../../codex/context-management";
+import { expandContextHistoryOutputs } from "../../codex/context-output-bundle";
 import {
   computeQuotaCooldown,
   codexQuotaScopeForModel,
@@ -1240,6 +1241,18 @@ async function retryCodexPoolOnAlternateAccount(
   // ordinary requests must block the first account before the alternate send.
   if (!deferFirstOutcome) recordFirstOutcome();
   const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
+  const retryContextSession = contextSessionFromHeaders(req.headers);
+  if (retryContextSession) {
+    try {
+      const owner = bindContextAccount(retryContextSession, route.modelId, retryAuthCtx, retryHeaders);
+      applyContextAccountSession(owner, req.headers, retryHeaders, parsed._rawBody);
+    }
+    catch (error) {
+      releaseCodexAuthContextProbeLease(retryAuthCtx);
+      await firstResponse.body?.cancel().catch(() => undefined);
+      throw error;
+    }
+  }
   const retryProvider = applyCodexAuthContextToProvider(
     stripCodexRuntimeProviderFields(route.provider),
     retryAuthCtx,
@@ -2784,6 +2797,12 @@ async function handleResponsesInner(
     ?? (body !== originalBody
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
 
+  const contextSessionId = contextSessionFromHeaders(req.headers);
+  if (contextSessionId) {
+    try { expandContextHistoryOutputs(body, contextSessionId); }
+    catch { return formatErrorResponse(409, "context_history_unavailable", "The context history result could not be restored"); }
+  }
+
   // Spawn-message compatibility (both directions): agent_message task payloads ride in
   // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
   // parsing so every consumer sees the payload: parseRequest (routed/translated providers read
@@ -3297,21 +3316,13 @@ async function handleResponsesInner(
   }
 
   let substituteMainCredential = false;
-  const contextSessionId = contextSessionFromHeaders(req.headers);
   if (contextSessionId) {
     if (!gptContextManagementEnabled(config) || !GPT_CONTEXT_MODELS.has(route.modelId)
       || route.providerName !== "openai" || !isCanonicalOpenAiForwardProvider(route.provider)) {
       return formatErrorResponse(409, "context_model_unsupported", "This experimental context requires native GPT Sol or Astra; start a new session for Luna, Terra or another provider");
     }
     try {
-      const binding = readContextAccountBinding(contextSessionId);
-      if (binding?.kind === "pool") {
-        if (route.codexAccountId && route.codexAccountId !== binding.accountId) throw new Error("Account selector changed");
-        route.codexAccountId = binding.accountId!;
-      } else if (binding?.kind === "caller") {
-        if (route.codexAccountId && route.codexAccountId !== MAIN_CODEX_ACCOUNT_ID) throw new Error("Account selector changed");
-        route.codexAccountMode = "direct";
-      }
+      readContextAccountBinding(contextSessionId);
     } catch {
       return formatErrorResponse(409, "context_account_unavailable", "Restore the original context account before continuing this session");
     }
@@ -3325,20 +3336,16 @@ async function handleResponsesInner(
   }
   if (contextSessionId) {
     try {
-      const binding = bindContextAccount(contextSessionId, route.modelId, authCtx, selectedForwardHeaders, substituteMainCredential);
-      // Existing exact-account semantics suppress quota/transient rotation after history ingests.
-      if (authCtx.kind !== "main") {
-        authCtx.fixedAccount = true;
-        route.codexAccountId = authCtx.accountId;
-      }
-      if (binding.kind === "caller") route.codexAccountMode = "direct";
+      const owner = bindContextAccount(contextSessionId, route.modelId, authCtx, selectedForwardHeaders, substituteMainCredential);
+      applyContextAccountSession(owner, req.headers, selectedForwardHeaders, parsed._rawBody);
+      // Context storage ownership must not override inference selection or failover.
       // Native 0.153 clients do not reliably send customized token-budget guidance.
       // Carry the user-requested self-report policy on each eligible request, including
       // the first request in a fresh window; legacy and routed models never reach here.
       injectDeveloperMessage(parsed, contextSelfReportGuidance(route.modelId));
     } catch {
       releaseCodexAuthContextProbeLease(authCtx);
-      return formatErrorResponse(409, "context_account_changed", "Context history belongs to a different account; restore it or start a new session");
+      return formatErrorResponse(409, "context_account_unavailable", "Context account tracking could not be saved; retry before continuing this session");
     }
   }
 

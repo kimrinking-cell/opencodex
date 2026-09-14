@@ -3,9 +3,13 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  applyGptContextManagement, bindContextAccount, contextSessionFromHeaders,
-  GPT_CONTEXT_MODELS, LEGACY_CONTEXT_MODELS, readContextAccountBinding, restoreGptContextManagement,
+  applyGptContextManagement, applyContextAccountSession, bindContextAccount, contextSessionFromHeaders,
+  GPT_CONTEXT_MODELS, LEGACY_CONTEXT_MODELS, readContextAccountBinding, readContextHistoryAccounts, restoreGptContextManagement,
 } from "../src/codex/context-management";
+import { bundleContextHistoryOutputs, expandContextHistoryOutputs } from "../src/codex/context-output-bundle";
+import { handleCodexAuthAPI } from "../src/codex/auth-api";
+import { recordCodexUpstreamOutcome, clearCodexAccountCooldown } from "../src/codex/routing";
+import { markAccountNeedsReauth, clearAccountNeedsReauth } from "../src/codex/account-runtime-state";
 import { handleContextManagement, isContextManagementPath } from "../src/server/context-management";
 import { handleResponses } from "../src/server/responses";
 import { loadConfig, saveConfig, validateConfigCandidate } from "../src/config";
@@ -144,14 +148,19 @@ test("only actual native history-ingest requests create a context session", () =
   expect(contextSessionFromHeaders(new Headers({ "x-codex-turn-metadata": "not-json" }))).toBeUndefined();
 });
 
-test("persistent bindings contain no bearer or raw ChatGPT identity and reject replacement", () => {
+test("persistent bindings preserve the note owner and record distinct history owners without credentials", () => {
   bind();
   expect(readContextAccountBinding("fixture-session")?.kind).toBe("caller");
   const file = join(root, "context-management", readdirSync(join(root, "context-management"))[0]!);
   const persisted = readFileSync(file, "utf8");
   expect(persisted).not.toContain("fixture-account-a");
   expect(persisted).not.toContain("Bearer");
-  expect(() => bind("fixture-account-b")).toThrow("another ChatGPT account");
+  const original = readContextAccountBinding("fixture-session");
+  bind("fixture-account-b");
+  bind("fixture-account-b");
+  expect(readContextAccountBinding("fixture-session")).toEqual(original);
+  expect(readContextHistoryAccounts("fixture-session")).toHaveLength(2);
+  expect(JSON.stringify(readContextHistoryAccounts("fixture-session"))).not.toContain("fixture-account");
 });
 
 test("endpoint allowlist excludes arbitrary backend paths and encoded variants", () => {
@@ -218,7 +227,8 @@ test("pool relay resolves the original added or main account explicitly and chec
         resolutions++;
         expect(mode).toBe("pool");
         expect(options?.accountId).toBe(accountId);
-        expect(options?.modelId).toBe("gpt-5.6-sol");
+        expect(options?.modelId).toBeUndefined();
+        expect(options?.contextStorageOnly).toBe(true);
         return auth;
       },
       materializeAuth: async () => headers(),
@@ -296,4 +306,159 @@ test("actual Responses wire carries self-report guidance only in active Sol/Astr
       expect(wire.includes("**컨텍스트 복구 문제 감지 — 복구 완료**")).toBe(experimental);
     }
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("history fans out across recorded accounts and opaque results expand on the Responses wire", async () => {
+  bind();
+  bind("fixture-account-b");
+  const token = fakeChatGptJwt({ chatgpt_account_id: "fixture-account-b" });
+  config.codexAccounts = [{ id: "pool-b", email: "fixture@example.test", isMain: false }];
+  config.pausedCodexAccountIds = ["pool-b"];
+  saveCodexAccountCredential("pool-b", { accessToken: token, refreshToken: "fixture", expiresAt: Date.now() + 3_600_000, chatgptAccountId: "fixture-account-b" });
+  const calls: string[] = [];
+  const response = await handleContextManagement(request(), config, undefined, {
+    fetch: (async (_url: unknown, init?: RequestInit) => {
+      const account = new Headers(init?.headers).get("chatgpt-account-id")!;
+      calls.push(account);
+      return Response.json({ encrypted_output: `ciphertext-${account}` });
+    }) as typeof fetch,
+  });
+  expect(response.status).toBe(200);
+  expect(calls.sort()).toEqual(["fixture-account-a", "fixture-account-b"]);
+  const result = await response.json();
+  const body = { input: [{ type: "function_call_output", output: [{ type: "encrypted_content", encrypted_content: result.encrypted_output }] }] };
+  expandContextHistoryOutputs(body, "fixture-session");
+  expect(body.input[0]!.output).toContainEqual({ type: "encrypted_content", encrypted_content: "ciphertext-fixture-account-a" });
+  expect(body.input[0]!.output).toContainEqual({ type: "encrypted_content", encrypted_content: "ciphertext-fixture-account-b" });
+  const wrong = { input: [{ type: "function_call_output", output: [{ type: "encrypted_content", encrypted_content: result.encrypted_output }] }] };
+  expect(() => expandContextHistoryOutputs(wrong, "another-session")).toThrow("Invalid context history bundle");
+  calls.length = 0;
+  const notes = await handleContextManagement(request("alpha/notes/v2/write_file", { context: { session_id: "fixture-session", current_agent_name: "/root" }, path: "checkpoint", text: "encrypted-fixture" }), config, undefined, {
+    fetch: (async (_url: unknown, init?: RequestInit) => {
+      calls.push(new Headers(init?.headers).get("chatgpt-account-id")!);
+      return Response.json({ encrypted_output: "write-result" });
+    }) as typeof fetch,
+  });
+  expect(notes.status).toBe(200);
+  expect(calls).toEqual(["fixture-account-a"]);
+});
+
+test("manual selection changes actual inference account within the same context while retaining history", async () => {
+  config.providers.openai!.codexAccountMode = "pool";
+  config.codexAccounts = ["a", "b"].map(id => ({ id: `pool-${id}`, email: `${id}@example.test`, isMain: false }));
+  for (const id of ["a", "b"]) saveCodexAccountCredential(`pool-${id}`, {
+    accessToken: fakeChatGptJwt({ chatgpt_account_id: `fixture-account-${id}` }),
+    refreshToken: "fixture", expiresAt: Date.now() + 3_600_000, chatgptAccountId: `fixture-account-${id}`,
+  });
+  config.activeCodexAccountId = "pool-a";
+  config.activeCodexAccountPinned = "pool-a";
+  const originalFetch = globalThis.fetch;
+  const captured: { account: string | null; body: string }[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.includes("/models")) return Response.json({ models: [{ slug: "gpt-5.6-sol", supported_in_api: true, visibility: "list" }] });
+    captured.push({ account: new Headers(init?.headers).get("chatgpt-account-id"), body: String(init?.body) });
+    return new Response('data: {"type":"response.completed","response":{"id":"fixture-response","status":"completed","output":[]}}\n\n', { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  const turn = async (bundle?: string) => {
+    const h = headers();
+    h.set("x-codex-turn-metadata", JSON.stringify({ session_id: "switch-session", history_ingest_requested: true }));
+    const input: unknown[] = [{ role: "user", content: "fixture" }];
+    if (bundle) input.push({ type: "function_call", name: "list_windows", call_id: "call-fixture", arguments: "{}" }, { type: "function_call_output", call_id: "call-fixture", output: [{ type: "encrypted_content", encrypted_content: bundle }] });
+    const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", {
+      method: "POST", headers: h, body: JSON.stringify({ model: "gpt-5.6-sol", input, stream: true }),
+    }), config, { model: "gpt-5.6-sol", provider: "openai" });
+    if (response.status !== 200) throw new Error(await response.text());
+    await response.text();
+  };
+  try {
+    await turn();
+    expect(captured.at(-1)?.account).toBe("fixture-account-a");
+    const select = new Request("http://localhost/api/codex-auth/active", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ accountId: "pool-b" }) });
+    const switched = await handleCodexAuthAPI(select, new URL(select.url), config);
+    expect(switched?.status).toBe(200);
+    await turn(bundleContextHistoryOutputs("switch-session", ["opaque-a", "opaque-b"], 0));
+    expect(captured.at(-1)?.account).toBe("fixture-account-b");
+    expect(captured.at(-1)?.body).toContain("opaque-a");
+    expect(captured.at(-1)?.body).toContain("opaque-b");
+    expect(captured.at(-1)?.body).not.toContain("ocx-context-history-v1:");
+    expect(readContextHistoryAccounts("switch-session")).toHaveLength(2);
+    expect(readContextAccountBinding("switch-session")?.accountId).toBe("pool-a");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("storage access ignores inference quota but still rejects reauthentication and removed accounts", async () => {
+  const id = "storage-quota-fixture";
+  const accessToken = fakeChatGptJwt({ chatgpt_account_id: "fixture-account-a" });
+  config.codexAccounts = [{ id, email: "fixture@example.test", isMain: false }];
+  saveCodexAccountCredential(id, { accessToken, refreshToken: "fixture", expiresAt: Date.now() + 3_600_000, chatgptAccountId: "fixture-account-a" });
+  const { resolveCodexAuthContext } = await import("../src/codex/auth-context");
+  const owner = await resolveCodexAuthContext(headers(), config, "pool", { accountId: id, contextStorageOnly: true });
+  bindContextAccount("fixture-session", "gpt-5.6-sol", owner, headers());
+  recordCodexUpstreamOutcome(config, id, 429, { retryAfter: "600" });
+  let calls = 0;
+  const deps = { fetch: (async () => { calls++; return Response.json({ encrypted_output: "opaque-fixture" }); }) as typeof fetch };
+  try {
+    expect((await handleContextManagement(request(), config, undefined, deps)).status).toBe(200);
+    expect(calls).toBe(1);
+    markAccountNeedsReauth(id);
+    expect((await handleContextManagement(request(), config, undefined, deps)).status).toBe(409);
+    clearAccountNeedsReauth(id);
+    config.codexAccounts = [];
+    expect((await handleContextManagement(request(), config, undefined, deps)).status).toBe(409);
+    expect(calls).toBe(1);
+  } finally {
+    clearAccountNeedsReauth(id);
+    clearCodexAccountCooldown(id);
+  }
+});
+
+test("an inaccessible history segment is explicitly partial and never changes note ownership", async () => {
+  bind();
+  bind("fixture-account-b");
+  const response = await handleContextManagement(request(), config, undefined, {
+    fetch: (async () => Response.json({ encrypted_output: "opaque-a" })) as typeof fetch,
+  });
+  expect(response.status).toBe(200);
+  const result = await response.json();
+  const body = { input: [{ type: "function_call_output", output: [{ type: "encrypted_content", encrypted_content: result.encrypted_output }] }] };
+  expandContextHistoryOutputs(body, "fixture-session");
+  expect(JSON.stringify(body)).toContain("1 segments are unavailable; this result is partial");
+  expect(readContextAccountBinding("fixture-session")?.identityHash).toBe(readContextHistoryAccounts("fixture-session")[0]?.identityHash);
+});
+
+
+test("alternate account namespaces backend ingestion and storage without changing public window identity", async () => {
+  bind();
+  const owner = bindContextAccount("fixture-session", "gpt-5.6-sol", { kind: "main", accountId: null }, authHeaders("fixture-account-b"));
+  expect(owner.backendSessionId).toBeTruthy();
+  expect(owner.backendSessionId).not.toBe("fixture-session");
+  const metadata = { session_id: "fixture-session", thread_id: "fixture-thread", window_id: "fixture-thread:1", context_window_id: "public-window", turn_id: "fixture-turn", history_ingest_requested: true };
+  const source = authHeaders("fixture-account-b");
+  source.set("x-codex-turn-metadata", JSON.stringify(metadata));
+  source.set("session-id", "fixture-session");
+  source.set("thread-id", "fixture-thread");
+  const target = new Headers(source);
+  const body = { client_metadata: { session_id: "fixture-session", thread_id: "fixture-thread", "x-codex-turn-metadata": JSON.stringify(metadata) }, input: [{ id: "public-item" }] };
+  applyContextAccountSession(owner, source, target, body);
+  const mapped = JSON.parse(target.get("x-codex-turn-metadata")!);
+  expect(mapped.session_id).toBe(owner.backendSessionId);
+  expect(mapped.thread_id).not.toBe(metadata.thread_id);
+  expect(mapped.turn_id).not.toBe(metadata.turn_id);
+  expect(mapped.window_id).toBe(`${mapped.thread_id}:1`);
+  expect(mapped.context_window_id).toBe("public-window");
+  expect(target.get("session-id")).toBe(mapped.session_id);
+  expect(target.get("thread-id")).toBe(mapped.thread_id);
+  expect(body.client_metadata.thread_id).toBe(mapped.thread_id);
+  expect(JSON.parse(body.client_metadata["x-codex-turn-metadata"])).toEqual(mapped);
+  expect(body.input[0]!.id).toBe("public-item");
+  expect(source.get("session-id")).toBe("fixture-session");
+  const storageSessions: string[] = [];
+  const response = await handleContextManagement(request(undefined, undefined, authHeaders("fixture-account-b")), config, undefined, {
+    resolveAuth: async () => ({ kind: "main", accountId: null }),
+    materializeAuth: async (_h, _a) => authHeaders("fixture-account-b"),
+    fetch: (async (_url, init) => { storageSessions.push(JSON.parse(String(init?.body)).context.session_id); return Response.json({ encrypted_output: "opaque" }); }) as typeof fetch,
+  });
+  expect(response.status).toBe(200);
+  expect(storageSessions).toEqual([owner.backendSessionId!]);
 });

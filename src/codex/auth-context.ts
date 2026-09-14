@@ -352,6 +352,8 @@ export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown):
 }
 
 export interface ResolveCodexAuthContextOptions {
+  /** Context storage I/O is not inference: preserve exact identity, but ignore pool pause/quota. */
+  contextStorageOnly?: boolean;
   excludeAccountId?: string;
   /** Resolve exactly this account without consulting or mutating Pool selection. */
   accountId?: string;
@@ -392,6 +394,9 @@ export async function resolveCodexAuthContext(
   const requestScopedMainCredential = options.requestScopedMainCredential === true
     && hasCallerCodexBearer(headers);
   const fixedAccountId = options.accountId;
+  if (options.contextStorageOnly && (fixedAccountId === undefined || options.modelId !== undefined)) {
+    throw new Error("Context storage requires one exact account and no inference model");
+  }
   const preserveRequestOwnedMainPin = requestScopedMainCredential
     && fixedAccountId === undefined
     && config.activeCodexAccountPinned === MAIN_CODEX_ACCOUNT_ID
@@ -608,13 +613,15 @@ export async function resolveCodexAuthContext(
       );
     }
     if (fixedAccountId !== undefined) {
-      if (isCodexAccountPaused(config, accountId)) {
+      if (!options.contextStorageOnly && isCodexAccountPaused(config, accountId)) {
         throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
       }
       if (isAccountNeedsReauth(accountId)) {
         throw new CodexPoolAuthenticationError("Selected Codex account needs reauthentication");
       }
-      if (!isCodexAccountUsable(config, accountId, selectionOptions)) {
+      if (options.contextStorageOnly
+        ? accountId !== MAIN_CODEX_ACCOUNT_ID && !(config.codexAccounts ?? []).some(account => account.id === accountId && !account.isMain)
+        : !isCodexAccountUsable(config, accountId, selectionOptions)) {
         throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
       }
     }
@@ -637,7 +644,7 @@ export async function resolveCodexAuthContext(
   }
   // Snapshot (not just the deadline) so a refused request can report WHY it is cooled:
   // a literal Retry-After reads very differently to a user than a reset-derived guess.
-  const cooldown = getCodexQuotaHealthSnapshot(accountId, quotaScope);
+  const cooldown = options.contextStorageOnly ? undefined : getCodexQuotaHealthSnapshot(accountId, quotaScope);
   const cooldownUntil = cooldown?.cooldownUntil;
   // A cooled-down account never sends traffic, so upstream recovery can never be
   // observed and the cooldown outlives the real limit. Admit one probe per
@@ -839,6 +846,14 @@ export function isCodexAuthContextUsable(ctx: CodexAuthContext, config: OcxConfi
   if (ctx.kind === "main") return true;
   if (ctx.kind === "main-pool") return isCodexAccountUsable(config, ctx.accountId);
   return isCodexAccountUsable(config, ctx.accountId) && isCodexAccountGenerationLive(ctx.accountId, ctx.generation);
+}
+
+export function isCodexContextStorageAuthUsable(ctx: CodexAuthContext, config: OcxConfig): boolean {
+  if (ctx.kind === "main") return true;
+  if (isAccountNeedsReauth(ctx.accountId)) return false;
+  if (ctx.kind === "main-pool") return !isNativeMainTrafficBlocked();
+  return (config.codexAccounts ?? []).some(account => account.id === ctx.accountId && !account.isMain)
+    && isCodexAccountGenerationLive(ctx.accountId, ctx.generation);
 }
 
 export function stripCodexRuntimeProviderFields(provider: OcxProviderConfig): OcxProviderConfig {
