@@ -13,6 +13,14 @@ principal et les comptes ajoutés ; Direct utilise uniquement le jeton Bearer du
 Ces routes ne se rabattent jamais l'une sur l'autre. Les configurations v1 distribuées migrent vers le marqueur
 2 et conservent `config.json.pre-openai-tiers-v2.bak` pour une restauration manuelle.
 
+## Gestion de contexte GPT (expérimental)
+
+Activez **Gestion de contexte GPT (expérimental)** en haut de **Paramètres Codex → Multi-auth**. Cela enregistre `gptContextManagement` via `/api/settings` et actualise le catalogue sans redémarrer le proxy.
+
+Une fois activé, Sol et Astra natifs conservent les Notes sur le premier compte Plus ou Pro qui sert la tâche. Sol et Astra peuvent s'échanger dans ce fil. Luna et Terra peuvent continuer l'inférence dans le même fil expérimental et lire ou mettre à jour ces Notes ; les Notes restent chez le propriétaire Sol ou Astra d'origine. Une tâche commencée sur Luna ou Terra n'a pas encore de propriétaire Notes ; les écritures Notes restent indisponibles tant que Sol ou Astra n'en a pas pris un. Les comptes du pool suivants peuvent continuer l'inférence, y compris les comptes Team dont les points d'accès Notes sont indisponibles. OpenCodex ne relaie pas l'History native pour ces sessions et ne fusionne pas l'History distante d'un compte dans un autre. Après un changement de fenêtre de contexte, récupérez la conversation depuis les enregistrements de session AgentsView locaux (`codex:<thread id>`) et conservez les décisions durables dans Notes.
+
+Une fois désactivé, les nouvelles tâches utilisent la compaction standard et le routage de compte habituel. Rouvrez Codex et démarrez une nouvelle tâche après le changement. La désactivation peut interrompre des tâches Notes en cours ; elle ne migre pas les notes vers un autre compte.
+
 ## Injection de configuration
 
 `ocx init`, `ocx start` et `ocx sync` appellent l'injecteur. Sur la liaison de bouclage par défaut, il conserve

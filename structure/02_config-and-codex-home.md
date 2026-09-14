@@ -76,15 +76,18 @@ to SQLite ownership; the tolerant root-string helper used by injection and catal
 ## Experimental context continuity receipts
 
 When GPT context management is enabled for native Sol or Astra, OpenCodex injects a passive
-continuity protocol alongside the existing failure self-report guidance. A model may issue a
+continuity protocol alongside the existing failure self-report guidance. Inference may follow the
+selected pool account, including a Sol/Astra switch or Luna/Terra inference in that experimental thread; native Notes stay with the first Plus or Pro writer, and Luna or Terra may update those Notes through that owner only when that owner already exists. Native History is not
+relayed. Conversation recovery after a window change uses Notes plus AgentsView. A model may issue a
 checkpoint only at a verified milestone of substantive unfinished work. The opaque token must be
 written with the compact task state to native Notes at `continuity/current.md` and read back before
 the context changes. The local checkpoint under `$OPENCODEX_HOME/context-continuity/state/` stores
 only the token hash and bounded identifiers, not the note text or token.
 
 After a real compacted-window transition, a healthy receipt is admitted only when the same rollout
-proves the exact checkpoint write and readback, a targeted Notes read or History search in the new
-window, exact token recovery, and a completed ordinary task tool action. Receipts live under
+proves the exact checkpoint write and readback, a targeted Notes read in the new window, exact
+token recovery, and a completed ordinary task tool action. Native History is not relayed for these
+sessions; conversation recovery uses Notes plus AgentsView. Receipts live under
 `$OPENCODEX_HOME/context-continuity/receipts/`; they mark semantic task recovery as unverified.
 Missing checkpoints, same-window attempts, generic listings, incomplete or encrypted evidence that
 cannot satisfy the bounded contract, and harmless corrected arguments remain inconclusive rather

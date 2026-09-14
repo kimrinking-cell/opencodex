@@ -80,6 +80,17 @@ export interface OcxParsedRequest {
    */
   _stripReasoningEncryptedContent?: boolean;
   /**
+   * Internal marker for native experimental-context sessions whose Notes owner ChatGPT identity
+   * differs from this attempt's serving identity. Set only after auth materialization; never
+   * accepted as public input.
+   */
+  _contextAccountSplit?: boolean;
+  /**
+   * Trusted native experimental-context session id, copied from turn metadata after the
+   * Sol/Astra/Luna/Terra gate. Used to recompute `_contextAccountSplit` on each serving bind.
+   */
+  _contextNotesSessionId?: string;
+  /**
    * Optional authenticated tenant/operator namespace for Cursor thread→conversation derivation.
    * When absent (single-operator local proxy), derivation stays local-scoped.
    */

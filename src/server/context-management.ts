@@ -16,15 +16,21 @@ import { hasForwardableCodexBearer, validateForwardAdmissionCredential } from ".
 import { codexAccountSelectionForTurn } from "./lifecycle";
 import { readJsonRequestBody } from "./request-decompress";
 
-const PATHS = new Set([
+const HISTORY_PATHS = new Set([
   "alpha/history/v2/list_windows", "alpha/history/v2/list_items",
   "alpha/history/v2/read_item", "alpha/history/v2/search_contents",
+]);
+const NOTES_PATHS = new Set([
   "alpha/notes/v2/thread_hint", "alpha/notes/v2/list_files_by_prefix",
   "alpha/notes/v2/read_file", "alpha/notes/v2/search_contents",
   "alpha/notes/v2/append_to_file", "alpha/notes/v2/write_file",
 ]);
+const PATHS = new Set([...HISTORY_PATHS, ...NOTES_PATHS]);
 export function isContextManagementPath(path: string): boolean {
   return path.startsWith("/v1/") && PATHS.has(path.slice(4));
+}
+export function isContextHistoryPath(path: string): boolean {
+  return path.startsWith("/v1/") && HISTORY_PATHS.has(path.slice(4));
 }
 
 export interface ContextRelayDependencies {
@@ -70,6 +76,13 @@ export async function handleContextManagement(
   catch { return formatErrorResponse(400, "invalid_request_error", "Invalid context-management request body"); }
   const sessionId = contextSessionFromBody(body);
   if (!sessionId) return formatErrorResponse(400, "invalid_request_error", "A valid context session is required");
+  if (isContextHistoryPath(path)) {
+    return formatErrorResponse(
+      404,
+      "context_history_disabled",
+      "Native History is not used for this session; recover conversation from local session records",
+    );
+  }
   let binding;
   try { binding = readContextAccountBinding(sessionId); }
   catch { return formatErrorResponse(409, "context_account_unavailable", "The original context account binding is unavailable"); }
@@ -111,6 +124,7 @@ export async function handleContextManagement(
       : await (dependencies.resolveAuth ?? resolveCodexAuthContext)(req.headers, config, "pool", {
         accountId: binding.accountId!, modelId: binding.model,
         beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
+        ignoreQuotaCooldown: true,
         signal: linked.signal,
       });
     if (!isCodexAuthContextUsable(auth, config)) {

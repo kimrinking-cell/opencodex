@@ -1527,6 +1527,55 @@ describe("Codex auth context", () => {
       .rejects.toBeInstanceOf(CodexAccountCooldownError);
   });
 
+  test("retry-after cooldown without a probe lease selects another pool account", async () => {
+    const now = 1_800_000_000_000;
+    const cfg = config();
+    cfg.codexAccounts = [
+      { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "pool_a_acc" },
+      { id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "pool_b_acc" },
+    ];
+    cfg.activeCodexAccountId = "pool-a";
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_a_token",
+      refreshToken: "pool_a_refresh",
+      expiresAt: now + 24 * 60 * 60_000,
+      chatgptAccountId: "pool_a_acc",
+    });
+    saveCodexAccountCredential("pool-b", {
+      accessToken: "pool_b_token",
+      refreshToken: "pool_b_refresh",
+      expiresAt: now + 24 * 60 * 60_000,
+      chatgptAccountId: "pool_b_acc",
+    });
+    recordCodexUpstreamOutcome(cfg, "pool-a", 429, { retryAfter: "60", now });
+
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool")).resolves.toMatchObject({
+      kind: "pool",
+      accountId: "pool-b",
+    });
+  });
+
+  test("exact Notes-owner resolve ignores inference quota cooldown", async () => {
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool_token",
+      refreshToken: "pool_refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool_acc",
+    });
+    const now = 1_800_000_000_000;
+    recordCodexUpstreamOutcome(config(), "pool-a", 429, { retryAfter: "60", now, modelId: "gpt-6-astra" });
+    const headers = new Headers({ authorization: "Bearer main_token" });
+    await expect(resolveCodexAuthContext(headers, config(), "pool", {
+      accountId: "pool-a",
+      modelId: "gpt-6-astra",
+    })).rejects.toBeInstanceOf(CodexAccountCooldownError);
+    await expect(resolveCodexAuthContext(headers, config(), "pool", {
+      accountId: "pool-a",
+      modelId: "gpt-6-astra",
+      ignoreQuotaCooldown: true,
+    })).resolves.toMatchObject({ kind: "pool", accountId: "pool-a", fixedAccount: true });
+  });
+
   test("reset-derived cooldown admits one probe and clears on its success (#433)", async () => {
     const originalNow = Date.now;
     const now = 1_800_000_000_000;

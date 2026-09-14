@@ -347,6 +347,7 @@
   "config.test.ts": "server",
   "consume-for-inspection-cancel.test.ts": "server",
   "container-bootstrap.test.ts": "service",
+  "context-account-probe.test.ts": "providers",
   "context-cap-unknown-window.test.ts": "providers",
   "continuation-dedup.test.ts": "responses",
   "core-lab-boundary.test.ts": "lab",

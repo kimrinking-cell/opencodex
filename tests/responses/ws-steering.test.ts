@@ -624,7 +624,10 @@ describe("composed native Astra endpoint", () => {
     const previousFetch = globalThis.fetch;
     const home = mkdtempSync(join(tmpdir(), "ocx-astra-ws-"));
     const codexHome = installIsolatedCodexHome("ocx-astra-ws-codex-");
-    const accountToken = fakeChatGptJwt({ chatgpt_account_id: "fixture-account" });
+    const accountToken = fakeChatGptJwt({
+      chatgpt_account_id: "fixture-account",
+      chatgpt_plan_type: "plus",
+    });
     let upstream: FixtureUpstream | undefined;
     let upstreamUrl = "";
     let upstreamHeaders: Record<string, string> = {};

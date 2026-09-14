@@ -7,6 +7,14 @@ opencodex는 Codex가 읽는 두 가지, 즉 설정(`$CODEX_HOME/config.toml`, �
 
 프록시는 bare `openai` Codex 로그인 경로 하나와 Pool(기본) 및 Direct 계정 모드, 그리고 설정된 API 키용 `openai-apikey/<model>`을 제공합니다. Pool은 메인 계정과 추가된 계정을 포함하고, Direct는 호출자/메인 bearer만 사용합니다. 경로들은 서로 fallback하지 않습니다. shipped v1 config는 marker 2로 이관되며, 수동 복원을 위해 `config.json.pre-openai-tiers-v2.bak`를 보존합니다.
 
+## GPT 컨텍스트 관리 (실험)
+
+**Codex 설정 → 다중 인증** 화면 위쪽의 **GPT 컨텍스트 관리 (실험)** 토글로 켜고 끕니다. `/api/settings`를 통해 `gptContextManagement`를 저장하고, 프록시를 재시작하지 않고 모델 카탈로그를 갱신합니다.
+
+켜면 네이티브 Sol·Astra는 그 작업을 처음 처리한 Plus 또는 Pro 계정에 **Notes**를 고정합니다. 같은 실험 스레드에서 Sol과 Astra를 바꿔도 되고, Luna·Terra도 추론을 이어가며 그 Notes를 읽고 고칠 수 있으며, Notes 소유 계정은 바뀌지 않습니다. Luna나 Terra로 시작한 작업에는 아직 Notes 소유자가 없으며, Sol이나 Astra가 소유자를 정하기 전에는 Notes 쓰기가 되지 않습니다. 이후 풀 계정은 추론만 이어갈 수 있고, 자체 Notes 엔드포인트가 없는 Team 계정도 포함됩니다. 이 세션에서는 네이티브 History를 중계하지 않으며, 한 계정의 원격 History를 다른 계정으로 합치지 않습니다. 컨텍스트 창이 바뀐 뒤에는 AgentsView 로컬 세션 기록(`codex:<스레드 id>`)에서 대화를 찾고, 창을 넘겨야 하는 결정은 Notes에 둡니다.
+
+끄면 새 작업은 일반 압축과 일반 계정 라우팅을 사용합니다. 설정을 바꾼 뒤에는 Codex를 다시 열고 새 작업을 시작하세요. 끄면 진행 중이던 Notes 작업이 끊길 수 있으며, 노트를 다른 계정으로 옮기지는 않습니다.
+
 ## 설정 주입
 
 `ocx init`, `ocx start`, `ocx sync`는 모두 인젝터를 호출합니다. 기본 loopback 바인드에서는 Codex의 빌트인 `openai` 프로바이더 id를 그대로 유지한 채, 그 프로바이더가 opencodex를 바라보게 합니다.

@@ -10,7 +10,7 @@ import {
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import { ConfigMutationLockError } from "../config";
 import { NativeProfileError } from "./native-profile-types";
-import { isCodexAccountUsable } from "./account-usability";
+import { isCodexAccountUsable, type CodexAccountUsabilityOptions } from "./account-usability";
 import { reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
 import {
   MAIN_CODEX_ACCOUNT_ID,
@@ -574,6 +574,11 @@ export interface ResolveCodexAuthContextOptions {
   requestScopedMainCredential?: boolean;
   /** Test seam for a Direct request's own forwarded ChatGPT credential. */
   isDirectCallerEntitledToCodexModel?: (headers: Headers, modelId: string) => Promise<boolean>;
+  /**
+   * Bound Notes/History relay must use the original owner even when that account is in
+   * inference quota cooldown. Cooldown remains authoritative for pool selection.
+   */
+  ignoreQuotaCooldown?: boolean;
 }
 
 export interface CodexAccountSelectionAdmission {
@@ -712,6 +717,7 @@ export async function resolveCodexAuthContext(
   const nativeMainSelectionOnly = !nativeMainTrafficBlocked
     && selectionAdmission?.mainProfileDraining === true;
   let accountId: string;
+  let selectionOptions: CodexAccountUsabilityOptions | undefined;
   const quotaScope = codexQuotaScopeForModel(options.modelId);
   try {
     const excludeAccountIds = nativeMainReadsForbidden
@@ -731,7 +737,7 @@ export async function resolveCodexAuthContext(
     const modelEligibleAccountIds = entitledAccountIds
       ? new Set([...entitledAccountIds].filter(candidate => !excludeAccountIds?.has(candidate)))
       : undefined;
-    const selectionOptions = {
+    selectionOptions = {
       // Temporary switch drain keeps the candidate until the atomic claim rejects
       // it. Retained recovery makes main wholly ineligible so pool routing continues.
       nativeMainSelectionOnly,
@@ -867,25 +873,42 @@ export async function resolveCodexAuthContext(
   }
   // Snapshot (not just the deadline) so a refused request can report WHY it is cooled:
   // a literal Retry-After reads very differently to a user than a reset-derived guess.
-  const cooldown = getCodexQuotaHealthSnapshot(accountId, quotaScope);
-  const cooldownUntil = cooldown?.cooldownUntil;
   // A cooled-down account never sends traffic, so upstream recovery can never be
   // observed and the cooldown outlives the real limit. Admit one probe per
-  // interval; its outcome decides whether the cooldown ends (#433).
+  // interval; its outcome decides whether the cooldown ends (#433). When that
+  // probe is already spent, serve a healthy pool mate instead of a quota 429.
   let probeLeaseId: string | undefined;
   let probeQuotaScope: CodexQuotaScope | undefined;
-  if (cooldownUntil) {
-    // Exact bindings are not Pool recovery traffic. Fail closed instead of consuming the Pool's
-    // one probe lease or selecting another account.
-    if (fixedAccountId !== undefined) {
-      throw new CodexAccountCooldownError(accountId, cooldownUntil, cooldown?.cooldownSource, cooldown?.quotaScope);
-    }
-    probeQuotaScope = cooldown?.quotaScope;
-    probeLeaseId = probeQuotaScope
-      ? tryAcquireCodexQuotaScopeProbeLease(accountId, probeQuotaScope) ?? undefined
-      : tryAcquireCodexQuotaProbeLease(accountId) ?? undefined;
-    if (!probeLeaseId) {
-      throw new CodexAccountCooldownError(accountId, cooldownUntil, cooldown?.cooldownSource, cooldown?.quotaScope);
+  if (options.ignoreQuotaCooldown !== true) {
+    const skippedCooled = new Set<string>();
+    for (;;) {
+      const cooldown = getCodexQuotaHealthSnapshot(accountId, quotaScope);
+      const cooldownUntil = cooldown?.cooldownUntil;
+      if (!cooldownUntil) {
+        probeLeaseId = undefined;
+        probeQuotaScope = undefined;
+        break;
+      }
+      if (fixedAccountId !== undefined) {
+        throw new CodexAccountCooldownError(accountId, cooldownUntil, cooldown?.cooldownSource, cooldown?.quotaScope);
+      }
+      probeQuotaScope = cooldown?.quotaScope;
+      probeLeaseId = probeQuotaScope
+        ? tryAcquireCodexQuotaScopeProbeLease(accountId, probeQuotaScope) ?? undefined
+        : tryAcquireCodexQuotaProbeLease(accountId) ?? undefined;
+      if (probeLeaseId) break;
+      skippedCooled.add(accountId);
+      const alternate = pickAlternateCodexAccount(
+        config,
+        accountId,
+        Date.now(),
+        quotaScope,
+        selectionOptions,
+      );
+      if (!alternate || skippedCooled.has(alternate)) {
+        throw new CodexAccountCooldownError(accountId, cooldownUntil, cooldown?.cooldownSource, cooldown?.quotaScope);
+      }
+      accountId = alternate;
     }
   }
 

@@ -187,9 +187,15 @@ import {
 } from "../../codex/main-account";
 import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import {
-  bindContextAccount, contextSelfReportGuidance, contextSessionFromHeaders,
-  gptContextManagementEnabled, GPT_CONTEXT_MODELS, readContextAccountBinding,
+  contextNotesParticipantGuidance, contextSelfReportGuidance, contextSessionFromHeaders,
+  gptContextManagementEnabled, GPT_CONTEXT_MODELS, LEGACY_CONTEXT_MODELS,
+  readContextAccountBinding,
 } from "../../codex/context-management";
+import {
+  configuredPlanForContextOwner,
+  applyContextAccountSplitFlag,
+  ensureContextNotesOwner,
+} from "../../codex/context-account-probe";
 import {
   computeQuotaCooldown,
   codexQuotaScopeForModel,
@@ -546,6 +552,7 @@ function bindRouteReasoningReplayScope(args: {
   forwardHeaders?: Headers;
 }): void {
   const { parsed, providerName, provider, adapterName } = args;
+  applyContextAccountSplitFlag(parsed, args.forwardHeaders);
   let credentialIdentity: string | undefined;
   let credentialDurableIdentity: string | undefined;
   const durableSalt = thoughtSignatureReplaySalt();
@@ -638,10 +645,12 @@ function bindRouteReasoningReplayScope(args: {
   );
   // Keep this sticky for the whole outbound request: a later auth/key rebind may compare equal
   // after the first mismatch, but it cannot make history minted by the prior route decodable.
-  if (reasoningReplayServingIdentityChanged(parsed._reasoningReplayScope)) {
+  if (parsed._contextAccountSplit !== true
+    && reasoningReplayServingIdentityChanged(parsed._reasoningReplayScope)) {
     parsed._stripReasoningEncryptedContent = true;
   }
-  if (reasoningReplayOpaqueBlobRejectionMemoized(parsed._reasoningReplayScope)) {
+  if (parsed._contextAccountSplit !== true
+    && reasoningReplayOpaqueBlobRejectionMemoized(parsed._reasoningReplayScope)) {
     parsed._stripReasoningEncryptedContent = true;
   }
   bindProviderContinuationForRoute(parsed, continuationOwner);
@@ -893,6 +902,10 @@ function normalizeUpstreamErrorText(text: string, fallback: string): NormalizedU
 }
 
 function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
+  // When this attempt's ChatGPT identity is not the Notes owner, let the selected backend
+  // decide whether an opaque blob can be decrypted. Stripping and replaying would turn an
+  // authoritative rejection into a false success under a different account.
+  if (parsed._contextAccountSplit === true) return;
   parsed._stripReasoningEncryptedContent = true;
   const rawBody = parsed._rawBody;
   if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return;
@@ -958,6 +971,9 @@ async function attemptOpaqueBlobRecovery(
   },
   rebuild: (kind: AttemptRecoveryKind) => Promise<Response | { failed: Response }>,
 ): Promise<OpaqueBlobRecoveryResult> {
+  // Do not consume or rebuild a split-account response: all opaque-blob retries are disabled
+  // for this native request so callers receive the genuine upstream verdict.
+  if (args.parsed._contextAccountSplit === true) return { kind: "skipped" };
   const errorBody = await opaqueBlobRejectionBodyForRecovery(
     args.response,
     args.outboundBody,
@@ -3606,6 +3622,8 @@ async function handleResponsesInner(
             "_promptCacheKeyIsSharedCohort",
             "_cursorClientThreadId",
             "_reasoningReplayScope",
+            "_contextAccountSplit",
+            "_contextNotesSessionId",
             "_cursorIsolateConversation",
           ];
           for (const key of kept) {
@@ -3800,23 +3818,19 @@ async function handleResponsesInner(
 
   let substituteMainCredential = false;
   const contextSessionId = contextSessionFromHeaders(req.headers);
-  if (contextSessionId) {
-    if (!gptContextManagementEnabled(config) || !GPT_CONTEXT_MODELS.has(route.modelId)
-      || route.providerName !== "openai" || !isCanonicalOpenAiForwardProvider(route.provider)) {
-      return formatErrorResponse(409, "context_model_unsupported", "This experimental context requires native GPT Sol or Astra; start a new session for Luna, Terra or another provider");
-    }
-    try {
-      const binding = readContextAccountBinding(contextSessionId);
-      if (binding?.kind === "pool") {
-        if (route.codexAccountId && route.codexAccountId !== binding.accountId) throw new Error("Account selector changed");
-        route.codexAccountId = binding.accountId!;
-      } else if (binding?.kind === "caller") {
-        if (route.codexAccountId && route.codexAccountId !== MAIN_CODEX_ACCOUNT_ID) throw new Error("Account selector changed");
-        route.codexAccountMode = "direct";
-      }
-    } catch {
-      return formatErrorResponse(409, "context_account_unavailable", "Restore the original context account before continuing this session");
-    }
+  const nativeContextForward = gptContextManagementEnabled(config)
+    && route.providerName === "openai"
+    && isCanonicalOpenAiForwardProvider(route.provider);
+  const nativeContextNotesModel = nativeContextForward && GPT_CONTEXT_MODELS.has(route.modelId);
+  // Luna/Terra keep inferring in a Sol/Astra experimental-context thread. Notes stay
+  // bound to the Sol/Astra owner; blocking the model cycle was turning every Luna
+  // injection and account-switch turn into a 409.
+  const nativeContextInferenceOnly = nativeContextForward && LEGACY_CONTEXT_MODELS.has(route.modelId);
+  if (contextSessionId && !nativeContextNotesModel && !nativeContextInferenceOnly) {
+    return formatErrorResponse(409, "context_model_unsupported", "This experimental context requires native GPT Sol or Astra; start a new session for Luna, Terra or another provider");
+  }
+  if (contextSessionId && (nativeContextNotesModel || nativeContextInferenceOnly)) {
+    parsed._contextNotesSessionId = contextSessionId;
   }
   {
     const finalAuth = await resolveResponsesCodexAuth(req, config, route, options);
@@ -3825,15 +3839,27 @@ async function handleResponsesInner(
     selectedForwardHeaders = finalAuth.headers;
     substituteMainCredential = finalAuth.substituteMainCredential;
   }
-  if (contextSessionId) {
+  if (contextSessionId && nativeContextNotesModel) {
     try {
-      const binding = bindContextAccount(contextSessionId, route.modelId, authCtx, selectedForwardHeaders, substituteMainCredential);
-      if (authCtx.kind !== "main") {
-        authCtx.fixedAccount = true;
-        route.codexAccountId = authCtx.accountId;
-      }
-      if (binding.kind === "caller") route.codexAccountMode = "direct";
+      // Inference uses the selected route account. Notes stay with the first Plus/Pro writer.
+      ensureContextNotesOwner(
+        contextSessionId,
+        route.modelId,
+        authCtx,
+        selectedForwardHeaders,
+        substituteMainCredential,
+        configuredPlanForContextOwner(config, authCtx),
+      );
       injectDeveloperMessage(parsed, contextSelfReportGuidance(route.modelId));
+    } catch {
+      releaseCodexAuthContextProbeLease(authCtx);
+      return formatErrorResponse(409, "context_account_changed", "Context history belongs to a different account; restore it or start a new session");
+    }
+  } else if (contextSessionId && nativeContextInferenceOnly) {
+    try {
+      if (readContextAccountBinding(contextSessionId)) {
+        injectDeveloperMessage(parsed, contextNotesParticipantGuidance());
+      }
     } catch {
       releaseCodexAuthContextProbeLease(authCtx);
       return formatErrorResponse(409, "context_account_changed", "Context history belongs to a different account; restore it or start a new session");

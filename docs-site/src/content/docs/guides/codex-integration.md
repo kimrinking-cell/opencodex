@@ -20,6 +20,14 @@ plus `openai-apikey/<model>` for the configured API key. Pool includes main plus
 Direct uses only the caller/main bearer. The routes do not fall back to one another. Shipped v1
 configs migrate to marker 2 and preserve `config.json.pre-openai-tiers-v2.bak` for manual restore.
 
+## GPT context management (experimental)
+
+Use the **GPT context management (experimental)** toggle at the top of **Codex settings → Multi-auth**. It saves `gptContextManagement` through `/api/settings` and refreshes the model catalog without restarting the proxy.
+
+When enabled, native Sol and Astra keep **Notes** on the first Plus or Pro account that serves the task. Sol and Astra may switch with each other in that thread. Luna and Terra may keep inferring there too and may read or update those Notes; Notes stay with the original Sol or Astra owner. A task that starts on Luna or Terra has no Notes owner yet; Notes writes stay unavailable until Sol or Astra claims one. Later pool accounts may continue inference, including Team accounts whose own Notes endpoints are unavailable. OpenCodex does **not** relay native History for these sessions and does not merge one account's remote History into another. After a context-window reset, recover conversation from local AgentsView session records (`codex:<thread id>`) and keep durable decisions in Notes.
+
+When disabled, new tasks use standard context compaction and normal account routing. Reopen Codex and start a new task after changing the setting. Disabling it can interrupt existing Notes tasks; it does not migrate notes to another account.
+
 ## Config injection
 
 `ocx init`, `ocx start`, and `ocx sync` call the injector. On the default loopback bind, it keeps

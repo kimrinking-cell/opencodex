@@ -16,6 +16,14 @@ dönmez (fall back yapmaz). Sevk edilen v1 yapılandırmaları işaretçi 2'ye g
 ve manuel geri yükleme için `config.json.pre-openai-tiers-v2.bak` dosyasını
 korur.
 
+## GPT bağlam yönetimi (deneysel)
+
+**Codex ayarları → Çoklu kimlik** üstündeki **GPT bağlam yönetimi (deneysel)** anahtarı `gptContextManagement` değerini `/api/settings` ile kaydeder ve proxy'yi yeniden başlatmadan kataloğu yeniler.
+
+Açıkken yerel Sol ve Astra, görevi ilk işleyen Plus veya Pro hesabında Notes'u tutar. Aynı iş parçacığında Sol ile Astra yer değiştirebilir. Aynı deneysel iş parçacığında Luna ve Terra da çıkarımı sürdürebilir ve bu Notes'u okuyup güncelleyebilir; Notes sahibi değişmez. Luna veya Terra ile başlayan bir görevin henüz Notes sahibi yoktur; Sol veya Astra sahip olana kadar Notes yazımı kullanılamaz. Sonraki havuz hesapları çıkarımı sürdürebilir; kendi Notes uç noktaları olmayan Team hesapları da buna dahildir. Bu oturumlarda yerel History aktarılmaz ve bir hesabın uzak History'si başka bir hesaba birleştirilmez. Bağlam penceresi değiştikten sonra konuşmayı yerel AgentsView oturum kayıtlarından (`codex:<thread id>`) kurtarın, kalıcı kararları Notes'ta tutun.
+
+Kapalıyken yeni görevler standart sıkıştırma ve olağan hesap yönlendirmesini kullanır. Ayarı değiştirdikten sonra Codex'i yeniden açıp yeni bir görev başlatın. Kapatmak sürmekte olan Notes görevlerini kesebilir; notları başka hesaba taşımaz.
+
 ## Yapılandırma enjeksiyonu
 
 `ocx init`, `ocx start` ve `ocx sync` enjektörü çağırır. Varsayılan geri döngü

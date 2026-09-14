@@ -6,7 +6,9 @@ import {
   applyGptContextManagement, bindContextAccount, contextSessionFromHeaders,
   GPT_CONTEXT_MODELS, LEGACY_CONTEXT_MODELS, readContextAccountBinding, restoreGptContextManagement,
 } from "../../src/codex/context-management";
-import { handleContextManagement, isContextManagementPath, type ContextRelayFailure } from "../../src/server/context-management";
+import {
+  handleContextManagement, isContextHistoryPath, isContextManagementPath, type ContextRelayFailure,
+} from "../../src/server/context-management";
 import { handleResponses } from "../../src/server/responses";
 import { loadConfig, saveConfig, validateConfigCandidate } from "../../src/config";
 import { startServer } from "../../src/server";
@@ -47,7 +49,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-const request = (operation = "alpha/history/v2/list_windows", body: unknown = { context: { session_id: "fixture-session", current_agent_name: "/root" }, limit: 1 }, h = headers()) =>
+const request = (operation = "alpha/notes/v2/read_file", body: unknown = { context: { session_id: "fixture-session", current_agent_name: "/root" }, limit: 1 }, h = headers()) =>
   new Request(`http://127.0.0.1/v1/${operation}`, { method: "POST", headers: h, body: JSON.stringify(body) });
 function bind(account = "fixture-account-a") {
   return bindContextAccount("fixture-session", "gpt-5.6-sol", { kind: "main", accountId: null }, authHeaders(account));
@@ -108,7 +110,7 @@ describe("native GPT catalog opt-in", () => {
     rows.forEach((row, i) => {
       const messages = models[i]!.model_messages as Record<string, any>;
       expect(messages.token_budget.enabled).toBe(row.experimental);
-      expect(messages.token_budget.use_history_notes_extension).toBe(row.experimental);
+      expect(messages.token_budget.use_history_notes_extension).toBe(true);
       expect(models[i]!.supports_experimental_context).toBe(row.experimental);
       expect(messages.token_budget.guidance_message.includes("context-failure-report.ts")).toBe(row.experimental);
       expect(messages.token_budget.guidance_message.includes("context-continuity-receipt.ts")).toBe(row.experimental);
@@ -165,6 +167,8 @@ test("persistent bindings contain no bearer or raw ChatGPT identity and reject r
 
 test("endpoint allowlist excludes arbitrary backend paths and encoded variants", () => {
   expect(isContextManagementPath("/v1/alpha/notes/v2/write_file")).toBe(true);
+  expect(isContextHistoryPath("/v1/alpha/history/v2/search_contents")).toBe(true);
+  expect(isContextHistoryPath("/v1/alpha/notes/v2/read_file")).toBe(false);
   for (const path of ["/v1/alpha/notes/v2/delete_file", "/v1/alpha/notes/v2/read_file/", "/v1/alpha/notes/v2/read_file%2f", "/backend-api/codex/alpha/notes/v2/read_file"]) {
     expect(isContextManagementPath(path)).toBe(false);
   }
@@ -177,6 +181,21 @@ test("startup hint is empty before model selection; real operations cannot pick 
   expect((await handleContextManagement(request(), config)).status).toBe(409);
   expect((await handleContextManagement(request(), { ...config, gptContextManagement: false })).status).toBe(404);
   expect((await handleContextManagement(request(undefined, undefined, new Headers({ "content-type": "application/json" })), config)).status).toBe(401);
+});
+
+test("native History paths never reach the backend", async () => {
+  bind();
+  let calls = 0;
+  const response = await handleContextManagement(request("alpha/history/v2/search_contents"), config, undefined, {
+    fetch: (async () => { calls++; return Response.json({ encrypted_output: "should-not-run" }); }) as typeof fetch,
+  });
+  expect(response.status).toBe(404);
+  expect((await response.json() as { error?: { type?: string } }).error?.type).toBe("context_history_disabled");
+  expect(calls).toBe(0);
+  expect((await handleContextManagement(request("alpha/history/v2/list_windows"), config, undefined, {
+    fetch: (async () => { calls++; return Response.json({}); }) as typeof fetch,
+  })).status).toBe(404);
+  expect(calls).toBe(0);
 });
 
 test("notes relay preserves encrypted arguments, context, truncation and opaque output", async () => {
@@ -354,7 +373,94 @@ test("actual Responses wire carries self-report guidance only in active Sol/Astr
       expect(wire).toContain(model);
       expect(wire.includes("context-failure-report.ts")).toBe(experimental);
       expect(wire.includes("context-continuity-receipt.ts")).toBe(experimental);
+      expect(wire.includes("AgentsView")).toBe(experimental);
       expect(wire.includes("**컨텍스트 복구 문제 감지 — 복구 완료**")).toBe(experimental);
     }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Sol infers in an Astra-owned experimental-context thread without replacing the Notes owner", async () => {
+  writeFileSync(join(isolatedCodexHome.path, "auth.json"), JSON.stringify({ tokens: { access_token: fakeChatGptJwt({ chatgpt_account_id: "fixture-account-a" }), refresh_token: "fixture-refresh", account_id: "fixture-account-a" } }));
+  bindContextAccount("fixture-session", "gpt-6-astra", { kind: "main", accountId: null }, authHeaders());
+  const originalFetch = globalThis.fetch;
+  const captured: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.includes("/models")) return Response.json({ models: ["gpt-5.6-sol", "gpt-6-astra"].map(slug => ({ slug, supported_in_api: true, visibility: "list" })) });
+    captured.push(typeof init?.body === "string" ? init.body : "");
+    return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  try {
+    const h = headers();
+    h.set("x-codex-turn-metadata", JSON.stringify({ session_id: "fixture-session", history_ingest_requested: true }));
+    const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", {
+      method: "POST", headers: h, body: JSON.stringify({ model: "gpt-5.6-sol", input: [{ role: "user", content: "fixture" }], stream: true }),
+    }), config, { model: "gpt-5.6-sol", provider: "openai" });
+    if (response.status !== 200) throw new Error(`sol: ${await response.text()}`);
+    expect(response.status).toBe(200);
+    await response.text();
+    const wire = captured.at(-1) ?? "";
+    expect(wire).toContain("gpt-5.6-sol");
+    expect(wire.includes("context-failure-report.ts")).toBe(true);
+    expect(readContextAccountBinding("fixture-session")?.model).toBe("gpt-6-astra");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Luna and Terra infer in an experimental-context thread with Notes write guidance", async () => {
+  writeFileSync(join(isolatedCodexHome.path, "auth.json"), JSON.stringify({ tokens: { access_token: fakeChatGptJwt({ chatgpt_account_id: "fixture-account-a" }), refresh_token: "fixture-refresh", account_id: "fixture-account-a" } }));
+  const originalFetch = globalThis.fetch;
+  const captured: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.includes("/models")) return Response.json({ models: ["gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-luna", "gpt-5.6-terra"].map(slug => ({ slug, supported_in_api: true, visibility: "list" })) });
+    captured.push(typeof init?.body === "string" ? init.body : "");
+    return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  try {
+    bind();
+    for (const model of LEGACY_CONTEXT_MODELS) {
+      captured.length = 0;
+      const h = headers();
+      h.set("x-codex-turn-metadata", JSON.stringify({ session_id: "fixture-session", history_ingest_requested: true }));
+      const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", {
+        method: "POST", headers: h, body: JSON.stringify({ model, input: [{ role: "user", content: "fixture" }], stream: true }),
+      }), config, { model, provider: "openai" });
+      if (response.status !== 200) throw new Error(`${model}: ${await response.text()}`);
+      expect(response.status).toBe(200);
+      await response.text();
+      const wire = captured.at(-1) ?? "";
+      expect(wire).toContain(model);
+      expect(wire.includes("context-failure-report.ts")).toBe(false);
+      expect(wire.includes("AgentsView")).toBe(true);
+      expect(wire.includes("continuity/current.md")).toBe(true);
+      expect(readContextAccountBinding("fixture-session")?.model).toBe("gpt-5.6-sol");
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Luna infers without Notes-owner guidance when no Sol or Astra binding exists", async () => {
+  writeFileSync(join(isolatedCodexHome.path, "auth.json"), JSON.stringify({ tokens: { access_token: fakeChatGptJwt({ chatgpt_account_id: "fixture-account-a" }), refresh_token: "fixture-refresh", account_id: "fixture-account-a" } }));
+  const originalFetch = globalThis.fetch;
+  const captured: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.includes("/models")) return Response.json({ models: ["gpt-5.6-luna"].map(slug => ({ slug, supported_in_api: true, visibility: "list" })) });
+    captured.push(typeof init?.body === "string" ? init.body : "");
+    return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  try {
+    const h = headers();
+    h.set("x-codex-turn-metadata", JSON.stringify({ session_id: "luna-first-session", history_ingest_requested: true }));
+    const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", {
+      method: "POST", headers: h, body: JSON.stringify({ model: "gpt-5.6-luna", input: [{ role: "user", content: "fixture" }], stream: true }),
+    }), config, { model: "gpt-5.6-luna", provider: "openai" });
+    if (response.status !== 200) throw new Error(`luna-first: ${await response.text()}`);
+    expect(response.status).toBe(200);
+    await response.text();
+    const wire = captured.at(-1) ?? "";
+    expect(wire).toContain("gpt-5.6-luna");
+    expect(wire.includes("already has native Notes")).toBe(false);
+    expect(wire.includes("continuity/current.md")).toBe(false);
+    expect(readContextAccountBinding("luna-first-session")).toBeUndefined();
   } finally { globalThis.fetch = originalFetch; }
 });

@@ -1250,7 +1250,7 @@ test("management convergence preserves the Sol/Astra context policy across refre
       const row = twice.find(entry => entry.slug === `${prefix}${slug}`);
       const budget = (row?.model_messages as any)?.token_budget;
       expect(budget?.enabled).toBe(experimental);
-      expect(budget?.use_history_notes_extension).toBe(experimental);
+      expect(budget?.use_history_notes_extension).toBe(true);
       expect(budget?.guidance_message.includes("context-failure-report.ts")).toBe(experimental);
       expect(row?.supports_experimental_context).toBe(experimental);
     }

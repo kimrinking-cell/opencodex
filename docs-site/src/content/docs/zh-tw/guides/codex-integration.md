@@ -11,6 +11,14 @@ proxy 提供一條裸 `openai` Codex 登入路徑，可使用 Pool（預設）�
 bearer。這些路徑不會彼此 fallback。shipped v1 設定會遷移到 marker 2，並保留
 `config.json.pre-openai-tiers-v2.bak` 供手動恢復。
 
+## GPT 上下文管理（實驗）
+
+在 **Codex 設定 → 多帳號** 頂端以 **GPT 上下文管理（實驗）** 開關切換。它透過 `/api/settings` 儲存 `gptContextManagement`，並在不重啟代理的情況下更新模型目錄。
+
+啟用後，原生 Sol 與 Astra 會把 Notes 固定在首先處理該任務的 Plus 或 Pro 帳號。同一實驗執行緒中 Sol 與 Astra 可互相切換，Luna 與 Terra 也可繼續推論並讀寫這些 Notes，Notes 仍留在原來的 Sol 或 Astra 擁有者上。從 Luna 或 Terra 開始的任務尚無 Notes 擁有者，在 Sol 或 Astra 取得擁有權之前無法寫入 Notes。之後的池帳號可繼續推論，包含自身 Notes 端點不可用的 Team 帳號。這些工作階段不會轉送原生 History，也不會把一個帳號的遠端 History 合併到另一個帳號。上下文視窗切換後，從 AgentsView 本機工作階段紀錄（`codex:<thread id>`）還原對話，需跨視窗保留的決定寫入 Notes。
+
+關閉後，新任務使用標準壓縮與一般帳號路由。變更設定後請重新開啟 Codex 並開始新任務。關閉可能中斷進行中的 Notes 任務，不會把筆記遷移到其他帳號。
+
 ## 設定注入
 
 `ocx init`、`ocx start` 與 `ocx sync` 都會呼叫注入器。在預設 loopback 繫結下，它會保留 Codex

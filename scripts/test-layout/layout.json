@@ -513,6 +513,7 @@
     "consume-for-inspection-cancel.test.ts": "server",
     "container-bootstrap.test.ts": "service",
     "context-cap-unknown-window.test.ts": "providers",
+    "context-account-probe.test.ts": "providers",
     "continuation-dedup.test.ts": "responses",
     "core-lab-boundary.test.ts": "lab",
     "cost-cap-unknown-evidence.test.ts": "usage",

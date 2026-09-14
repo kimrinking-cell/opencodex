@@ -49,8 +49,17 @@ export function gptContextManagementEnabled(config: Pick<OcxConfig, "gptContextM
     && isCanonicalOpenAiForwardProvider(provider);
 }
 
+export function contextHistoryRecoveryGuidance(): string {
+  return "Do not use native History tools to recover prior conversation after a context-window reset or account change. Native History is not a continuity path across accounts. Search and read the current Codex thread through AgentsView: verify the session as `codex:<CODEX_THREAD_ID>`, then read a bounded window of user and assistant messages (`direction=desc`, `limit=12`) or search and read around a match. Keep Notes for decisions that must survive a window change. Unified adaptive search remains the route for preferences and other prior-context recall.";
+}
+
 export function contextSelfReportGuidance(model: string): string {
-  return `${contextContinuityReceiptGuidance(model, join(getConfigDir(), "context-continuity"))}\n\n${contextFailureReportGuidance(model, join(getConfigDir(), "context-failure-reports"))}`;
+  return `${contextContinuityReceiptGuidance(model, join(getConfigDir(), "context-continuity"))}\n\n${contextHistoryRecoveryGuidance()}\n\n${contextFailureReportGuidance(model, join(getConfigDir(), "context-failure-reports"))}`;
+}
+
+/** Luna/Terra in a Sol/Astra Notes thread may update Notes; they must not take ownership. */
+export function contextNotesParticipantGuidance(): string {
+  return "This thread already has native Notes owned by the original Sol or Astra writer. You may read and update those Notes, including continuity/current.md. Writes stay on that owner account; do not take Notes ownership or switch accounts. Do not use native History tools. After a context-window change, recover conversation from AgentsView (`codex:<CODEX_THREAD_ID>`) and keep durable decisions in Notes.";
 }
 
 /** Use Codex's model defaults, not a global flag which also activates routed models. */
@@ -77,7 +86,9 @@ export function applyGptContextManagement(models: RawEntry[], config: OcxConfig)
     row.model_messages = { ...own, token_budget: {
       ...defaults,
       enabled: experimental,
-      use_history_notes_extension: experimental,
+      // Luna/Terra stay off experimental compaction, but they still get Notes tools
+      // so they can update an already-owned Sol/Astra Notes thread.
+      use_history_notes_extension: true,
       ...(experimental ? { guidance_message: `${defaults!.guidance_message}\n\n${contextSelfReportGuidance(slug)}` } : {}),
     } };
   }
