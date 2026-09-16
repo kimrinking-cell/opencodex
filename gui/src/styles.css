@@ -2088,11 +2088,11 @@ button.prov-account-row.active { cursor: default; }
 @media (max-width: 760px) {
   /* rows: topbar auto + main fills — without this, align-content stretch splits the
      leftover viewport height between the two rows and inflates the top bar */
-  .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .app { grid-template-columns: 1fr; grid-template-rows: max-content minmax(0, 1fr); height: 100dvh; }
   .mobile-topbar {
     position: sticky; top: 0; z-index: var(--z-sticky);
     display: flex; align-items: center; gap: 2px;
-    padding: 4px 10px; min-width: 0;
+    padding: 4px 10px; min-width: 0; min-height: max-content;
     border-bottom: 1px solid var(--border);
     background: var(--glass-rail);
     backdrop-filter: var(--glass-blur);
